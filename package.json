@@ -6,13 +6,14 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "node scripts/copy-sqlite-wasm.mjs && next dev",
+    "build": "node scripts/copy-sqlite-wasm.mjs && next build",
     "lint": "eslint",
-    "test": "TZ=UTC node --test \"tests/**/*.test.ts\""
+    "test": "TZ=UTC node --import ./tests/register.mjs --test \"tests/**/*.test.ts\"",
+    "preview": "node scripts/serve-static.mjs"
   },
   "dependencies": {
+    "@sqlite.org/sqlite-wasm": "3.53.4-build2",
     "next": "16.4.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"

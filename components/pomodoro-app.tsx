@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { ambient, type SoundKind } from "@/lib/ambient";
+import { BASE_PATH } from "@/lib/base-path";
+import type { AppDatabase } from "@/lib/db/browser";
 import { formatDuration, formatTimeOfDay } from "@/lib/format";
 import { INITIAL_TIMER, localDate, timerReducer, type Phase, type TimerState } from "@/lib/schedule";
 import { readStored, useStoredString, writeStored } from "@/lib/storage";
@@ -31,11 +33,13 @@ const RETRY_MS = 15_000;
 const SOUND_KINDS: SoundKind[] = ["ocean", "fire", "rain", "nature"];
 
 interface PomodoroAppProps {
+  db: AppDatabase;
   initialSettings: Settings;
   initialTasks: Task[];
 }
 
-export function PomodoroApp({ initialSettings, initialTasks }: PomodoroAppProps) {
+export function PomodoroApp({ db, initialSettings, initialTasks }: PomodoroAppProps) {
+  const { repo } = db;
   const [settings, setSettings] = useState(initialSettings);
   const [timer, dispatch] = useReducer(timerReducer, INITIAL_TIMER);
   const [storedSound, setStoredSound] = useStoredString(SOUND_KEY);
@@ -43,7 +47,7 @@ export function PomodoroApp({ initialSettings, initialTasks }: PomodoroAppProps)
   const [panel, setPanel] = useState<"tasks" | "settings" | null>(null);
   const [today, setToday] = useState<TodayStats | null>(null);
   const [retry, setRetry] = useState(0);
-  const tasks = useTasks(initialTasks);
+  const tasks = useTasks(repo, initialTasks);
 
   // Reducer actions need the latest settings without re-subscribing timers.
   const settingsRef = useRef(settings);
@@ -53,8 +57,8 @@ export function PomodoroApp({ initialSettings, initialTasks }: PomodoroAppProps)
   }, [settings]);
 
   const refreshToday = useCallback(() => {
-    void fetchTodayStats().then((stats) => stats && setToday(stats));
-  }, []);
+    repo.getDayStats(localDate(Date.now())).then(setToday, () => {});
+  }, [repo]);
 
   // Restore the running timer (and catch up on phases missed while closed).
   useEffect(() => {
@@ -87,21 +91,18 @@ export function PomodoroApp({ initialSettings, initialTasks }: PomodoroAppProps)
     };
   }, []);
 
-  // Write finished phases to SQLite. The server ignores duplicate clientIds,
-  // so re-sending after a failure or a re-render is safe.
+  // Write finished phases to SQLite. Inserts ignore duplicate clientIds, so
+  // re-sending after a failure or a re-render is safe.
   const { outbox } = timer;
   const refreshTasks = tasks.refresh;
   useEffect(() => {
     if (outbox.length === 0) return;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const batch = outbox;
-    fetch("/api/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessions: batch }),
-    })
-      .then((res) => {
-        if (!res.ok && res.status !== 400) throw new Error(String(res.status));
+    repo
+      .insertSessions(batch)
+      .then(() => {
+        // Invalid entries are dropped by the repo; clear the whole batch either way.
         dispatch({ type: "flushed", clientIds: batch.map((l) => l.clientId) });
         refreshToday();
         if (batch.some((l) => l.type === "focus" && l.taskId !== null)) void refreshTasks();
@@ -110,7 +111,7 @@ export function PomodoroApp({ initialSettings, initialTasks }: PomodoroAppProps)
         retryTimer = setTimeout(() => setRetry((n) => n + 1), RETRY_MS);
       });
     return () => clearTimeout(retryTimer);
-  }, [outbox, retry, refreshToday, refreshTasks]);
+  }, [outbox, retry, repo, refreshToday, refreshTasks]);
 
   // Chime + notification when a phase ends on its own.
   const lastCompleted = useRef<string | null>(null);
@@ -123,7 +124,7 @@ export function PomodoroApp({ initialSettings, initialTasks }: PomodoroAppProps)
     const s = settingsRef.current;
     if (s.chime) ambient.chime(timer.phase?.type === "focus" ? "up" : "down");
     if (s.notifications && document.hidden && "Notification" in window && Notification.permission === "granted") {
-      new Notification(phaseHeadline(timer, s), { body: "Pomodoro", tag: "pomodoro-phase", icon: "/icon.svg" });
+      new Notification(phaseHeadline(timer, s), { body: "Pomodoro", tag: "pomodoro-phase", icon: `${BASE_PATH}/icon.svg` });
     }
   }, [lastLog, timer]);
 
@@ -173,13 +174,7 @@ export function PomodoroApp({ initialSettings, initialTasks }: PomodoroAppProps)
 
   const saveSettings = async (next: Settings) => {
     try {
-      const res = await fetch("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(next),
-      });
-      if (!res.ok) return false;
-      setSettings(await res.json());
+      setSettings(await repo.saveSettings(next));
       setPanel(null);
       return true;
     } catch {
@@ -278,20 +273,11 @@ export function PomodoroApp({ initialSettings, initialTasks }: PomodoroAppProps)
       </Sheet>
       <Sheet open={panel === "settings"} title="Settings" onClose={() => setPanel(null)}>
         {panel === "settings" && (
-          <SettingsForm settings={settings} onSave={saveSettings} onCancel={() => setPanel(null)} />
+          <SettingsForm db={db} settings={settings} onSave={saveSettings} onCancel={() => setPanel(null)} />
         )}
       </Sheet>
     </div>
   );
-}
-
-async function fetchTodayStats(): Promise<TodayStats | null> {
-  try {
-    const res = await fetch(`/api/stats?date=${localDate(Date.now())}`);
-    return res.ok ? ((await res.json()) as TodayStats) : null;
-  } catch {
-    return null; // offline: keep showing the last known numbers
-  }
 }
 
 function phaseHeadline(state: TimerState, s: Settings): string {

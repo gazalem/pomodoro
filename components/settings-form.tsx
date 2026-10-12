@@ -1,19 +1,22 @@
 "use client";
 
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
+import type { AppDatabase } from "@/lib/db/browser";
+import { downloadBlob } from "@/lib/download";
 import { formatDuration, formatHHMM, formatTimeOfDay } from "@/lib/format";
-import { previewDay } from "@/lib/schedule";
+import { localDate, previewDay } from "@/lib/schedule";
 import { normalizeSettings } from "@/lib/settings";
 import { useToday } from "@/lib/use-now";
 import type { Settings } from "@/lib/types";
 
 interface SettingsFormProps {
+  db: AppDatabase;
   settings: Settings;
   onSave: (settings: Settings) => Promise<boolean>;
   onCancel: () => void;
 }
 
-export function SettingsForm({ settings, onSave, onCancel }: SettingsFormProps) {
+export function SettingsForm({ db, settings, onSave, onCancel }: SettingsFormProps) {
   const [draft, setDraft] = useState(settings);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -118,6 +121,8 @@ export function SettingsForm({ settings, onSave, onCancel }: SettingsFormProps) 
         </label>
       </Group>
 
+      <DataSection db={db} />
+
       {error && (
         <p role="alert" className="text-sm font-medium text-tomato-deep">
           {error}
@@ -214,5 +219,78 @@ function Toggle({ label, hint, checked, onChange }: ToggleProps) {
         className="relative h-7 w-12 shrink-0 rounded-full bg-ink/20 transition-colors peer-checked:bg-tomato peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-tomato after:absolute after:top-1 after:left-1 after:size-5 after:rounded-full after:bg-white after:shadow after:transition-transform peer-checked:after:translate-x-5"
       />
     </label>
+  );
+}
+
+/** Backup and restore: the database lives only in this browser. */
+function DataSection({ db }: { db: AppDatabase }) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function backup() {
+    setBusy(true);
+    try {
+      const bytes = await db.exportDb();
+      downloadBlob(
+        new Blob([bytes as BlobPart], { type: "application/vnd.sqlite3" }),
+        `pomodoro-backup-${localDate(Date.now())}.sqlite3`,
+      );
+      setStatus("Backup downloaded.");
+    } catch {
+      setStatus("Couldn't create the backup.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restore(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!window.confirm("Replace all tasks, sessions and settings on this device with this backup?")) return;
+    setBusy(true);
+    try {
+      await db.importDb(new Uint8Array(await file.arrayBuffer()));
+      window.location.reload();
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Couldn't restore that file.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Group title="Your data">
+      <div className="py-3 text-sm text-ink-soft">
+        {db.storage === "opfs"
+          ? "Stored on this device in a SQLite database (browser private file system). Nothing is sent to a server."
+          : "This browser doesn't allow file storage here (e.g. a private window), so data is kept in IndexedDB and may be cleared when the window closes."}
+        <span className="mt-1 block text-xs">SQLite {db.sqliteVersion} · WebAssembly</span>
+      </div>
+      <div className="flex flex-wrap gap-2 py-3">
+        <button
+          type="button"
+          onClick={backup}
+          disabled={busy}
+          className="rounded-full border border-ink/15 px-4 py-2 text-sm font-medium hover:bg-ink/5 disabled:opacity-40"
+        >
+          Download backup
+        </button>
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={busy}
+          className="rounded-full border border-ink/15 px-4 py-2 text-sm font-medium hover:bg-ink/5 disabled:opacity-40"
+        >
+          Restore from backup…
+        </button>
+        <input ref={fileRef} type="file" accept=".sqlite3,.sqlite,.db,application/vnd.sqlite3" hidden onChange={restore} />
+      </div>
+      {status && (
+        <p role="status" className="pb-3 text-sm text-ink">
+          {status}
+        </p>
+      )}
+    </Group>
   );
 }
