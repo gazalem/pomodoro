@@ -109,6 +109,12 @@ export const ClockIcon = (p: IconProps) => (
   </Icon>
 );
 
+export const GripIcon = (p: IconProps) => (
+  <Icon {...p} stroke="none" fill="currentColor">
+    {[6, 12, 18].flatMap((cy) => [9, 15].map((cx) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r={1.7} />))}
+  </Icon>
+);
+
 export const PlusIcon = (p: IconProps) => (
   <Icon {...p} strokeWidth={2.5}>
     <path d="M12 5v14M5 12h14" />

@@ -37,6 +37,11 @@ const MIGRATIONS = [
     "CREATE INDEX sessions_task_id ON sessions (task_id)",
     "CREATE INDEX tasks_done ON tasks (done, completed_at)",
   ],
+  // 2: user-defined order for the to-do list; existing tasks keep creation order.
+  [
+    "ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+    "UPDATE tasks SET sort_order = id",
+  ],
 ];
 
 export async function migrate(db: SqlDriver): Promise<void> {

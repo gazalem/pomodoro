@@ -55,6 +55,21 @@ describe("tasks", () => {
     assert.equal((await repo.listTasks(Date.now() + 60_000)).length, 0); // completed before `since`
   });
 
+  it("keeps the user's order for open tasks; new tasks go last", async () => {
+    const a = (await repo.createTask({ title: "A" }))!;
+    const b = (await repo.createTask({ title: "B" }))!;
+    const c = (await repo.createTask({ title: "C" }))!;
+    await repo.reorderTasks([c.id, a.id, b.id]);
+    await repo.createTask({ title: "D" });
+    assert.deepEqual((await repo.listTasks(0)).map((t) => t.title), ["C", "A", "B", "D"]);
+
+    // Completed tasks drop below the open ones; reopening restores their slot.
+    await repo.updateTask(c.id, { done: true }, "2026-10-12");
+    assert.deepEqual((await repo.listTasks(0)).map((t) => t.title), ["A", "B", "D", "C"]);
+    await repo.updateTask(c.id, { done: false }, "2026-10-12");
+    assert.equal((await repo.listTasks(0))[0].title, "C");
+  });
+
   it("counts completed focus sessions toward a task", async () => {
     const task = (await repo.createTask({ title: "Review" }))!;
     await repo.insertSessions([log({ taskId: task.id }), log({ taskId: task.id, status: "stopped" })]);
