@@ -1,4 +1,4 @@
-import { getDb } from "./db";
+import { first, type SqlDriver, type SqlParam } from "./db/driver";
 import { normalizeSettings } from "./settings";
 import type { PhaseType, SessionLog, SessionStatus, Settings, Task, TodayStats } from "./types";
 
@@ -10,29 +10,17 @@ export function isIsoDate(value: unknown): value is string {
   return typeof value === "string" && DATE_RE.test(value) && !Number.isNaN(Date.parse(value));
 }
 
-// ---------------------------------------------------------------------------
-// Settings
-
-export function getSettings(): Settings {
-  const row = getDb().prepare("SELECT data FROM settings WHERE id = 1").get() as
-    | { data: string }
-    | undefined;
-  return normalizeSettings(row ? JSON.parse(row.data) : {});
-}
-
-export function saveSettings(input: unknown): Settings {
-  const settings = normalizeSettings(input);
-  getDb()
-    .prepare(
-      `INSERT INTO settings (id, data, updated_at) VALUES (1, ?, ?)
-       ON CONFLICT (id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
-    )
-    .run(JSON.stringify(settings), Date.now());
-  return settings;
+export function datesBetween(from: string, to: string): string[] {
+  const out: string[] = [];
+  const end = Date.parse(`${to}T00:00:00Z`);
+  for (let t = Date.parse(`${from}T00:00:00Z`); t <= end && out.length < 366; t += 86_400_000) {
+    out.push(new Date(t).toISOString().slice(0, 10));
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
-// Tasks
+// Row shapes
 
 interface TaskRow {
   id: number;
@@ -62,23 +50,6 @@ function toTask(row: TaskRow): Task {
   };
 }
 
-/** Open tasks plus tasks completed at or after `since` (epoch ms). */
-export function listTasks(since: number): Task[] {
-  const rows = getDb()
-    .prepare(
-      `${TASK_SELECT}
-       WHERE t.done = 0 OR t.completed_at >= ?
-       ORDER BY t.done ASC, CASE WHEN t.done = 0 THEN t.created_at ELSE -t.completed_at END ASC`,
-    )
-    .all(since) as unknown as TaskRow[];
-  return rows.map(toTask);
-}
-
-function getTask(id: number): Task | null {
-  const row = getDb().prepare(`${TASK_SELECT} WHERE t.id = ?`).get(id) as TaskRow | undefined;
-  return row ? toTask(row) : null;
-}
-
 function cleanTitle(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const title = value.trim().slice(0, 200);
@@ -86,64 +57,8 @@ function cleanTitle(value: unknown): string | null {
 }
 
 function cleanEstimate(value: unknown): number | null {
-  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 50
-    ? value
-    : null;
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 50 ? value : null;
 }
-
-export function createTask(input: { title?: unknown; estimatedPomodoros?: unknown }): Task | null {
-  const title = cleanTitle(input.title);
-  if (!title) return null;
-  const estimate = cleanEstimate(input.estimatedPomodoros) ?? 1;
-  const result = getDb()
-    .prepare("INSERT INTO tasks (title, estimated_pomodoros, created_at) VALUES (?, ?, ?)")
-    .run(title, estimate, Date.now());
-  return getTask(Number(result.lastInsertRowid));
-}
-
-export function updateTask(
-  id: number,
-  patch: { title?: unknown; estimatedPomodoros?: unknown; done?: unknown; localDate?: unknown },
-): Task | null {
-  const db = getDb();
-  const sets: string[] = [];
-  const values: (string | number | null)[] = [];
-
-  if (patch.title !== undefined) {
-    const title = cleanTitle(patch.title);
-    if (!title) return null;
-    sets.push("title = ?");
-    values.push(title);
-  }
-  if (patch.estimatedPomodoros !== undefined) {
-    const estimate = cleanEstimate(patch.estimatedPomodoros);
-    if (estimate === null) return null;
-    sets.push("estimated_pomodoros = ?");
-    values.push(estimate);
-  }
-  if (typeof patch.done === "boolean") {
-    sets.push("done = ?", "completed_at = ?", "completed_date = ?");
-    if (patch.done) {
-      const now = Date.now();
-      const date = isIsoDate(patch.localDate) ? patch.localDate : new Date(now).toISOString().slice(0, 10);
-      values.push(1, now, date);
-    } else {
-      values.push(0, null, null);
-    }
-  }
-
-  if (sets.length > 0) {
-    db.prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`).run(...values, id);
-  }
-  return getTask(id);
-}
-
-export function deleteTask(id: number): boolean {
-  return getDb().prepare("DELETE FROM tasks WHERE id = ?").run(id).changes > 0;
-}
-
-// ---------------------------------------------------------------------------
-// Sessions
 
 function validLog(value: unknown): SessionLog | null {
   if (!value || typeof value !== "object") return null;
@@ -161,60 +76,8 @@ function validLog(value: unknown): SessionLog | null {
   return v as unknown as SessionLog;
 }
 
-/**
- * Stores finished phases. Idempotent on clientId, so the client can safely
- * retry a batch after a network failure. Returns the clientIds accepted.
- */
-export function insertSessions(input: unknown[]): string[] {
-  const db = getDb();
-  const insert = db.prepare(
-    `INSERT OR IGNORE INTO sessions
-       (client_id, type, status, task_id, planned_seconds, actual_seconds,
-        started_at, ended_at, local_date, local_hour)
-     VALUES (?, ?, ?, (SELECT id FROM tasks WHERE id = ?), ?, ?, ?, ?, ?, ?)`,
-  );
-
-  const accepted: string[] = [];
-  db.exec("BEGIN");
-  try {
-    for (const item of input) {
-      const log = validLog(item);
-      if (!log) continue;
-      insert.run(
-        log.clientId,
-        log.type,
-        log.status,
-        log.taskId,
-        log.plannedSeconds,
-        log.actualSeconds,
-        log.startedAt,
-        log.endedAt,
-        log.localDate,
-        log.localHour,
-      );
-      accepted.push(log.clientId);
-    }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-  return accepted;
-}
-
-export function getDayStats(date: string): TodayStats {
-  const row = getDb()
-    .prepare(
-      `SELECT COALESCE(SUM(actual_seconds), 0) AS focus_seconds,
-              COALESCE(SUM(status = 'completed'), 0) AS pomodoros
-       FROM sessions WHERE type = 'focus' AND local_date = ?`,
-    )
-    .get(date) as { focus_seconds: number; pomodoros: number };
-  return { pomodoros: row.pomodoros, focusSeconds: row.focus_seconds };
-}
-
 // ---------------------------------------------------------------------------
-// Report
+// Report types
 
 export interface DayPoint {
   date: string;
@@ -268,124 +131,224 @@ export interface Report {
   recent: SessionRow[];
 }
 
-export function datesBetween(from: string, to: string): string[] {
-  const out: string[] = [];
-  const end = Date.parse(`${to}T00:00:00Z`);
-  for (let t = Date.parse(`${from}T00:00:00Z`); t <= end && out.length < 366; t += 86_400_000) {
-    out.push(new Date(t).toISOString().slice(0, 10));
+const SESSION_SELECT = `
+  SELECT s.id, s.type, s.status, t.title AS taskTitle, s.planned_seconds AS plannedSeconds,
+         s.actual_seconds AS actualSeconds, s.started_at AS startedAt, s.local_date AS localDate
+  FROM sessions s LEFT JOIN tasks t ON t.id = s.task_id
+  WHERE s.local_date BETWEEN ? AND ?`;
+
+// ---------------------------------------------------------------------------
+
+export type Repo = ReturnType<typeof createRepo>;
+
+/** All persistence for the app. Every query goes through the given driver. */
+export function createRepo(db: SqlDriver) {
+  async function getTask(id: number): Promise<Task | null> {
+    const row = await first<TaskRow>(db, `${TASK_SELECT} WHERE t.id = ?`, [id]);
+    return row ? toTask(row) : null;
   }
-  return out;
-}
 
-export function getReport(from: string, to: string): Report {
-  const db = getDb();
-  const settings = getSettings();
-
-  const dayRows = db
-    .prepare(
-      `SELECT local_date AS date,
-              SUM(actual_seconds) AS focusSeconds,
-              SUM(status = 'completed') AS pomodoros
-       FROM sessions
-       WHERE type = 'focus' AND local_date BETWEEN ? AND ?
-       GROUP BY local_date`,
-    )
-    .all(from, to) as unknown as DayPoint[];
-  const byDate = new Map(dayRows.map((d) => [d.date, d]));
-  const days = datesBetween(from, to).map(
-    (date) => byDate.get(date) ?? { date, focusSeconds: 0, pomodoros: 0 },
-  );
-
-  const hourRows = db
-    .prepare(
-      `SELECT local_hour AS hour, COUNT(*) AS pomodoros
-       FROM sessions
-       WHERE type = 'focus' AND status = 'completed' AND local_date BETWEEN ? AND ?
-       GROUP BY local_hour`,
-    )
-    .all(from, to) as unknown as HourPoint[];
-  const byHour = new Map(hourRows.map((h) => [h.hour, h.pomodoros]));
-  const hours = Array.from({ length: 24 }, (_, hour) => ({ hour, pomodoros: byHour.get(hour) ?? 0 }));
-
-  const agg = db
-    .prepare(
-      `SELECT
-         COUNT(*) FILTER (WHERE type = 'focus')                                   AS focusAttempts,
-         COALESCE(SUM(actual_seconds) FILTER (WHERE type IN ('short_break', 'long_break')), 0) AS breakSeconds,
-         COUNT(*) FILTER (WHERE type IN ('short_break', 'long_break') AND status = 'skipped') AS skippedBreaks
-       FROM sessions WHERE local_date BETWEEN ? AND ?`,
-    )
-    .get(from, to) as { focusAttempts: number; breakSeconds: number; skippedBreaks: number };
-
-  const { tasksCompleted } = db
-    .prepare(
-      "SELECT COUNT(*) AS tasksCompleted FROM tasks WHERE done = 1 AND completed_date BETWEEN ? AND ?",
-    )
-    .get(from, to) as { tasksCompleted: number };
-
-  const taskRows = db
-    .prepare(
-      `SELECT t.id, t.title, t.estimated_pomodoros AS estimated, t.done, t.completed_date AS completedDate,
-              SUM(s.type = 'focus' AND s.status = 'completed' AND s.local_date BETWEEN ? AND ?) AS spentInRange,
-              SUM(s.type = 'focus' AND s.status = 'completed') AS spentTotal
-       FROM tasks t
-       LEFT JOIN sessions s ON s.task_id = t.id
-       GROUP BY t.id
-       HAVING spentInRange > 0 OR (t.done = 1 AND t.completed_date BETWEEN ? AND ?)
-       ORDER BY spentInRange DESC, t.title ASC
-       LIMIT 50`,
-    )
-    .all(from, to, from, to) as unknown as (Omit<TaskPerformance, "done"> & { done: number })[];
-
-  const recent = db
-    .prepare(
-      `SELECT s.id, s.type, s.status, t.title AS taskTitle, s.planned_seconds AS plannedSeconds,
-              s.actual_seconds AS actualSeconds, s.started_at AS startedAt, s.local_date AS localDate
-       FROM sessions s LEFT JOIN tasks t ON t.id = s.task_id
-       WHERE s.local_date BETWEEN ? AND ?
-       ORDER BY s.started_at DESC
-       LIMIT 40`,
-    )
-    .all(from, to) as unknown as SessionRow[];
-
-  const focusSeconds = days.reduce((sum, d) => sum + d.focusSeconds, 0);
-  const pomodoros = days.reduce((sum, d) => sum + d.pomodoros, 0);
+  async function getSettings(): Promise<Settings> {
+    const row = await first<{ data: string }>(db, "SELECT data FROM settings WHERE id = 1");
+    return normalizeSettings(row ? JSON.parse(row.data) : {});
+  }
 
   return {
-    from,
-    to,
-    dailyGoal: settings.dailyGoal,
-    totals: {
-      focusSeconds,
-      pomodoros,
-      focusAttempts: agg.focusAttempts,
-      breakSeconds: agg.breakSeconds,
-      skippedBreaks: agg.skippedBreaks,
-      tasksCompleted,
-      activeDays: days.filter((d) => d.focusSeconds > 0).length,
-      goalDays: days.filter((d) => d.pomodoros >= settings.dailyGoal).length,
-    },
-    days,
-    hours,
-    tasks: taskRows.map((t) => ({
-      ...t,
-      spentInRange: t.spentInRange ?? 0,
-      spentTotal: t.spentTotal ?? 0,
-      done: t.done === 1,
-    })),
-    recent,
-  };
-}
+    getSettings,
 
-/** Sessions in a date range, oldest first, for CSV export. */
-export function exportSessions(from: string, to: string): SessionRow[] {
-  return getDb()
-    .prepare(
-      `SELECT s.id, s.type, s.status, t.title AS taskTitle, s.planned_seconds AS plannedSeconds,
-              s.actual_seconds AS actualSeconds, s.started_at AS startedAt, s.local_date AS localDate
-       FROM sessions s LEFT JOIN tasks t ON t.id = s.task_id
-       WHERE s.local_date BETWEEN ? AND ?
-       ORDER BY s.started_at ASC`,
-    )
-    .all(from, to) as unknown as SessionRow[];
+    async saveSettings(input: unknown): Promise<Settings> {
+      const settings = normalizeSettings(input);
+      await db.run(
+        `INSERT INTO settings (id, data, updated_at) VALUES (1, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
+        [JSON.stringify(settings), Date.now()],
+      );
+      return settings;
+    },
+
+    /** Open tasks plus tasks completed at or after `since` (epoch ms). */
+    async listTasks(since: number): Promise<Task[]> {
+      const rows = await db.all<TaskRow>(
+        `${TASK_SELECT}
+         WHERE t.done = 0 OR t.completed_at >= ?
+         ORDER BY t.done ASC, CASE WHEN t.done = 0 THEN t.created_at ELSE -t.completed_at END ASC`,
+        [since],
+      );
+      return rows.map(toTask);
+    },
+
+    async createTask(input: { title?: unknown; estimatedPomodoros?: unknown }): Promise<Task | null> {
+      const title = cleanTitle(input.title);
+      if (!title) return null;
+      const estimate = cleanEstimate(input.estimatedPomodoros) ?? 1;
+      const { lastInsertRowid } = await db.run(
+        "INSERT INTO tasks (title, estimated_pomodoros, created_at) VALUES (?, ?, ?)",
+        [title, estimate, Date.now()],
+      );
+      return getTask(lastInsertRowid);
+    },
+
+    /** `localDate` is the user's "YYYY-MM-DD", recorded when a task is completed. */
+    async updateTask(
+      id: number,
+      patch: { title?: unknown; estimatedPomodoros?: unknown; done?: unknown },
+      localDate: string,
+    ): Promise<Task | null> {
+      const sets: string[] = [];
+      const values: SqlParam[] = [];
+
+      if (patch.title !== undefined) {
+        const title = cleanTitle(patch.title);
+        if (!title) return null;
+        sets.push("title = ?");
+        values.push(title);
+      }
+      if (patch.estimatedPomodoros !== undefined) {
+        const estimate = cleanEstimate(patch.estimatedPomodoros);
+        if (estimate === null) return null;
+        sets.push("estimated_pomodoros = ?");
+        values.push(estimate);
+      }
+      if (typeof patch.done === "boolean") {
+        sets.push("done = ?", "completed_at = ?", "completed_date = ?");
+        values.push(...(patch.done ? [1, Date.now(), localDate] : [0, null, null]));
+      }
+
+      if (sets.length > 0) await db.run(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`, [...values, id]);
+      return getTask(id);
+    },
+
+    async deleteTask(id: number): Promise<boolean> {
+      return (await db.run("DELETE FROM tasks WHERE id = ?", [id])).changes > 0;
+    },
+
+    /**
+     * Stores finished phases in one transaction. Idempotent on clientId, so a
+     * batch can be retried safely. Returns the clientIds that were valid.
+     */
+    async insertSessions(input: unknown[]): Promise<string[]> {
+      const logs = input.map(validLog).filter((l): l is SessionLog => l !== null);
+      await db.batch(
+        logs.map((log) => ({
+          sql: `INSERT OR IGNORE INTO sessions
+                  (client_id, type, status, task_id, planned_seconds, actual_seconds,
+                   started_at, ended_at, local_date, local_hour)
+                VALUES (?, ?, ?, (SELECT id FROM tasks WHERE id = ?), ?, ?, ?, ?, ?, ?)`,
+          params: [
+            log.clientId,
+            log.type,
+            log.status,
+            log.taskId,
+            log.plannedSeconds,
+            log.actualSeconds,
+            log.startedAt,
+            log.endedAt,
+            log.localDate,
+            log.localHour,
+          ],
+        })),
+      );
+      return logs.map((l) => l.clientId);
+    },
+
+    async getDayStats(date: string): Promise<TodayStats> {
+      const row = await first<{ focus_seconds: number; pomodoros: number }>(
+        db,
+        `SELECT COALESCE(SUM(actual_seconds), 0) AS focus_seconds,
+                COALESCE(SUM(status = 'completed'), 0) AS pomodoros
+         FROM sessions WHERE type = 'focus' AND local_date = ?`,
+        [date],
+      );
+      return { pomodoros: row?.pomodoros ?? 0, focusSeconds: row?.focus_seconds ?? 0 };
+    },
+
+    async getReport(from: string, to: string): Promise<Report> {
+      const settings = await getSettings();
+
+      const dayRows = await db.all<DayPoint>(
+        `SELECT local_date AS date,
+                SUM(actual_seconds) AS focusSeconds,
+                SUM(status = 'completed') AS pomodoros
+         FROM sessions
+         WHERE type = 'focus' AND local_date BETWEEN ? AND ?
+         GROUP BY local_date`,
+        [from, to],
+      );
+      const byDate = new Map(dayRows.map((d) => [d.date, d]));
+      const days = datesBetween(from, to).map(
+        (date) => byDate.get(date) ?? { date, focusSeconds: 0, pomodoros: 0 },
+      );
+
+      const hourRows = await db.all<HourPoint>(
+        `SELECT local_hour AS hour, COUNT(*) AS pomodoros
+         FROM sessions
+         WHERE type = 'focus' AND status = 'completed' AND local_date BETWEEN ? AND ?
+         GROUP BY local_hour`,
+        [from, to],
+      );
+      const byHour = new Map(hourRows.map((h) => [h.hour, h.pomodoros]));
+      const hours = Array.from({ length: 24 }, (_, hour) => ({ hour, pomodoros: byHour.get(hour) ?? 0 }));
+
+      const agg = (await first<{ focusAttempts: number; breakSeconds: number; skippedBreaks: number }>(
+        db,
+        `SELECT
+           COUNT(*) FILTER (WHERE type = 'focus') AS focusAttempts,
+           COALESCE(SUM(actual_seconds) FILTER (WHERE type IN ('short_break', 'long_break')), 0) AS breakSeconds,
+           COUNT(*) FILTER (WHERE type IN ('short_break', 'long_break') AND status = 'skipped') AS skippedBreaks
+         FROM sessions WHERE local_date BETWEEN ? AND ?`,
+        [from, to],
+      ))!;
+
+      const completed = await first<{ tasksCompleted: number }>(
+        db,
+        "SELECT COUNT(*) AS tasksCompleted FROM tasks WHERE done = 1 AND completed_date BETWEEN ? AND ?",
+        [from, to],
+      );
+
+      const taskRows = await db.all<Omit<TaskPerformance, "done"> & { done: number }>(
+        `SELECT t.id, t.title, t.estimated_pomodoros AS estimated, t.done, t.completed_date AS completedDate,
+                SUM(s.type = 'focus' AND s.status = 'completed' AND s.local_date BETWEEN ? AND ?) AS spentInRange,
+                SUM(s.type = 'focus' AND s.status = 'completed') AS spentTotal
+         FROM tasks t
+         LEFT JOIN sessions s ON s.task_id = t.id
+         GROUP BY t.id
+         HAVING spentInRange > 0 OR (t.done = 1 AND t.completed_date BETWEEN ? AND ?)
+         ORDER BY spentInRange DESC, t.title ASC
+         LIMIT 50`,
+        [from, to, from, to],
+      );
+
+      const recent = await db.all<SessionRow>(`${SESSION_SELECT} ORDER BY s.started_at DESC LIMIT 40`, [from, to]);
+
+      return {
+        from,
+        to,
+        dailyGoal: settings.dailyGoal,
+        totals: {
+          focusSeconds: days.reduce((sum, d) => sum + d.focusSeconds, 0),
+          pomodoros: days.reduce((sum, d) => sum + d.pomodoros, 0),
+          focusAttempts: agg.focusAttempts,
+          breakSeconds: agg.breakSeconds,
+          skippedBreaks: agg.skippedBreaks,
+          tasksCompleted: completed?.tasksCompleted ?? 0,
+          activeDays: days.filter((d) => d.focusSeconds > 0).length,
+          goalDays: days.filter((d) => d.pomodoros >= settings.dailyGoal).length,
+        },
+        days,
+        hours,
+        tasks: taskRows.map((t) => ({
+          ...t,
+          spentInRange: t.spentInRange ?? 0,
+          spentTotal: t.spentTotal ?? 0,
+          done: t.done === 1,
+        })),
+        recent,
+      };
+    },
+
+    /** Sessions in a date range, oldest first, for CSV export. */
+    exportSessions(from: string, to: string): Promise<SessionRow[]> {
+      return db.all<SessionRow>(`${SESSION_SELECT} ORDER BY s.started_at ASC`, [from, to]);
+    },
+  };
 }

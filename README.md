@@ -1,30 +1,35 @@
 # Pomodoro
 
-A focus timer that runs your whole workday: focus blocks and breaks repeat on their own, stop for
-lunch, and stop again at the end of the day. Every session is stored in SQLite and shown in a report
-next to your tasks.
+A focus timer that runs your whole workday. Focus blocks and breaks repeat on their own, stop for
+lunch, and stop again at the end of the day. Every session is stored in a **SQLite database that
+runs in your browser (WebAssembly)** and shown in a report next to your tasks.
 
-Runs on desktop, tablet and phone browsers. It can also be installed as an app (PWA) from the
-browser's "Install" or "Add to Home Screen" menu.
+- **No server, no account.** The app is a static site. Your data never leaves your device.
+- **Works offline** after the first visit, and can be installed as an app on phone, tablet or desktop.
+- Hosts anywhere that serves static files: **GitHub Pages**, Vercel, Netlify, S3, nginx.
 
 ## Getting started
 
-Requires **Node.js 22.13+** (uses the built-in `node:sqlite`, so there are no native modules to compile).
+Requires **Node.js 22.13+**.
 
 ```bash
 pnpm install
-pnpm dev          # http://localhost:3000 (the Network URL works from a phone on the same Wi-Fi)
+pnpm dev                       # http://localhost:3000
 ```
 
-| Script       | What it does                                        |
-| ------------ | --------------------------------------------------- |
-| `pnpm dev`   | Dev server                                          |
-| `pnpm build` | Production build (`pnpm start` to serve it)         |
-| `pnpm test`  | Unit tests for the scheduling engine (`node --test`) |
-| `pnpm lint`  | ESLint                                              |
+| Script         | What it does                                                            |
+| -------------- | ----------------------------------------------------------------------- |
+| `pnpm dev`     | Dev server                                                              |
+| `pnpm build`   | Static export to `out/` (set `NEXT_PUBLIC_BASE_PATH` for a sub-path)    |
+| `pnpm preview` | Serves `out/` locally like a static host would                          |
+| `pnpm test`    | Unit tests: timer engine and every SQL query (`node --test`)            |
+| `pnpm lint`    | ESLint                                                                  |
 
-The database is created on first request at `data/pomodoro.db` (gitignored). Set `POMODORO_DB_PATH`
-to put it somewhere else.
+Try the production build under a GitHub Pages-style sub-path:
+
+```bash
+NEXT_PUBLIC_BASE_PATH=/pomodoro pnpm build && NEXT_PUBLIC_BASE_PATH=/pomodoro pnpm preview
+```
 
 ## How the day runs
 
@@ -36,67 +41,64 @@ the timer uses, e.g. "8 focus blocks before lunch at 12:00 PM, 8 after".
 - **Lunch.** A phase that would run into lunch is shortened to end exactly at lunch start. Lunch then
   runs as its own phase, and focus resumes afterwards (or waits for you, if you turn that off).
   Starting inside the lunch window goes straight to lunch; **Skip** ends lunch early.
-- **End of day.** The last phase is clipped to the end time and the cycle stops. Starting it again
-  after hours is allowed (overtime is not clipped).
-- **Optional auto-start** at the workday start time while the app is open.
-- **Accurate in the background.** The timer stores wall-clock end times, not a countdown, so throttled
-  tabs, phone lock screens and sleeping laptops land on the right phase when they wake. Missed
-  phases are completed and recorded. The cycle never carries over past midnight.
+- **End of day.** The last phase is clipped to the end time and the cycle stops.
+- **Accurate in the background.** The timer stores wall-clock end times, so throttled tabs, locked
+  phones and sleeping laptops land on the right phase when they wake. Missed phases are still recorded.
 
-Other features: ambient sounds (ocean, fire, rain, nature birds) synthesized with Web Audio (no
-audio files) that play during focus; a chime and optional system notifications when a phase ends;
-and a screen wake lock while running.
+Also: ambient sounds synthesized with Web Audio, a chime and optional notifications, and a screen
+wake lock while running.
 
 ## Tasks & report
 
-Add tasks with a pomodoro estimate and pick one before focusing. Each completed focus block counts
-toward that task. The **report** (chart icon) covers any date range:
+Add tasks with a pomodoro estimate and pick one before focusing. The **report** (chart icon) shows
+focus time, pomodoros, days on goal, focus completion rate, tasks completed, per-day and per-hour
+charts, estimate vs. actual per task, a session log, and **CSV export**.
 
-- focus time, pomodoros, days that hit your goal, focus completion rate (finished vs. stopped or
-  skipped), tasks completed, break time
-- pomodoros per day against your goal, and your most productive hours
-- per-task spent vs. estimate, a session log, and **CSV export**
+## Your data
+
+Data is stored with SQLite's **`opfs-sahpool`** VFS in the browser's Origin Private File System.
+Unlike the plain `opfs` VFS, it doesn't need COOP/COEP headers, so it works on GitHub Pages.
+
+- **Settings → Your data → Download backup** saves the raw `.sqlite3` file. **Restore** loads it on
+  another device or browser. The backup also opens in any SQLite tool (`sqlite3`, DB Browser).
+- Data is per browser and per site. Clearing site data deletes it, so keep backups.
+- The app asks the browser for persistent storage so data isn't evicted under storage pressure.
+- Where OPFS isn't available (e.g. Firefox private windows), the database runs in memory and is
+  snapshotted to IndexedDB after each write. The settings sheet says which mode is active.
+- Only one tab can own the database at a time (a Web Lock enforces this). A second tab shows a
+  notice and takes over automatically when the first one closes.
 
 ## Architecture
 
 ```
 app/
-  page.tsx                 Timer screen: static shell + SQLite data streamed in (Cache Components)
-  report/page.tsx          Report (server component; reads SQLite directly)
-  api/settings             GET / PUT settings
-  api/tasks, tasks/[id]    Task CRUD
-  api/sessions             POST finished phases (idempotent on clientId)
-  api/stats                Today's totals for the header
-  api/report/export        CSV
-  manifest.ts, icon.svg    PWA install
-components/                Client UI (timer ring, sound tiles, task panel, settings, chart)
+  page.tsx, report/page.tsx   Static pages; all data is loaded on the client
+  manifest.ts, icon.svg       PWA install
+components/
+  app-gate.tsx                Opens the database, then renders the timer
+  pomodoro-app.tsx            Timer screen; report-client.tsx / report-view.tsx for the report
 lib/
-  schedule.ts              Pure timer engine + reducer (all scheduling rules live here)
-  db.ts                    node:sqlite connection, WAL, versioned migrations
-  repo.ts                  Queries and input validation
-  ambient.ts               Web Audio soundscapes and chime
-tests/schedule.test.ts     Engine tests: cycle, lunch clipping, catch-up, day end, pause/skip
+  schedule.ts                 Pure timer engine + reducer (all scheduling rules)
+  repo.ts                     Every SQL query, written against an async SqlDriver
+  db/worker.ts                Web Worker that owns SQLite WASM (OPFS, or IndexedDB fallback)
+  db/client.ts                Promise RPC to the worker (implements SqlDriver)
+  db/browser.ts               One-tab lock, migrations, useDatabase() hook
+  db/migrations.ts            Versioned schema (PRAGMA user_version)
+public/sw.js                  Service worker for offline use
+scripts/copy-sqlite-wasm.mjs  Copies the SQLite WASM runtime into public/ (run by dev/build)
+tests/                        Engine tests + repo tests on node:sqlite via the same SqlDriver
 ```
 
-**Where state lives.** Each device stores the running timer in `localStorage`, so a reload or a
-closed lid picks up where it left off. Finished phases are added to an outbox in that state and
-POSTed to `/api/sessions`. Failed POSTs are retried, and the server ignores duplicates, so nothing is
-lost or counted twice while offline. Settings, tasks and sessions live in SQLite.
+**Why a worker:** OPFS's synchronous file handles are only available in workers, and running SQLite
+there keeps the UI thread free. **Why copy the runtime to `public/`:** the sqlite-wasm package
+creates internal workers from dynamic URLs that bundlers can't resolve, so it's loaded at runtime
+from a versioned folder instead (`public/sqlite-wasm/` is gitignored and regenerated).
 
-**Time zones.** The client records each session's local date and hour, so per-day and per-hour charts
-use your local time. The report's default range, and the times in its session log, use the server's
-clock, which is correct when the server runs on your own machine.
+**Data flow.** The running timer lives in `localStorage`, so a reload continues it. Finished phases
+go into an outbox and are written to SQLite with `INSERT OR IGNORE` on a client-generated ID, so
+retries never double-count.
 
 ## Deployment
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for Vercel, Heroku, GitHub Pages and persistent-disk hosts.
-
-## Limitations / next steps
-
-- **Single user, no auth.** Add authentication before exposing it beyond your machine or LAN, and
-  add a `user_id` column to tasks/sessions/settings.
-- **Serverless hosts** (e.g. Vercel) don't keep a local SQLite file. Self-host with `pnpm build &&
-  pnpm start` (or a container with a volume for `data/`), or swap `lib/db.ts` for libSQL/Turso.
-- The running timer isn't synced between devices; a timer started on the laptop isn't visible on
-  the phone. Storing the timer state server-side would make that possible.
-- No offline service worker yet; the app needs the server to load.
+Push to `main` and **.github/workflows/deploy-pages.yml** publishes to GitHub Pages. See
+[DEPLOYMENT.md](DEPLOYMENT.md) for setup and for other hosts.

@@ -40,5 +40,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# local sqlite database
-/data
+# copied from node_modules by scripts/copy-sqlite-wasm.mjs
+/public/sqlite-wasm

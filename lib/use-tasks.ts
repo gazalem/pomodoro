@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import type { Repo } from "./repo";
 import { localDate } from "./schedule";
 import type { Task } from "./types";
 
@@ -10,31 +11,22 @@ function startOfToday(): number {
   return d.getTime();
 }
 
-async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
-  });
-  if (!res.ok) throw new Error(`${init?.method ?? "GET"} ${url} failed: ${res.status}`);
-  return (res.status === 204 ? null : await res.json()) as T;
-}
-
 /**
  * Task list state with optimistic updates. On failure the list is reloaded
- * from the server so the UI never drifts from what is stored.
+ * from the database so the UI never drifts from what is stored.
  */
-export function useTasks(initial: Task[]) {
+export function useTasks(repo: Repo, initial: Task[]) {
   const [tasks, setTasks] = useState(initial);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setTasks(await request<Task[]>(`/api/tasks?since=${startOfToday()}`));
+      setTasks(await repo.listTasks(startOfToday()));
       setError(null);
     } catch {
-      setError("Couldn't load tasks. Check your connection.");
+      setError("Couldn't load tasks.");
     }
-  }, []);
+  }, [repo]);
 
   const mutate = useCallback(
     async (optimistic: (list: Task[]) => Task[], run: () => Promise<void>) => {
@@ -50,20 +42,21 @@ export function useTasks(initial: Task[]) {
     [refresh],
   );
 
-  const add = useCallback(async (title: string, estimatedPomodoros: number) => {
-    try {
-      const task = await request<Task>("/api/tasks", {
-        method: "POST",
-        body: JSON.stringify({ title, estimatedPomodoros }),
-      });
-      setTasks((list) => [...list.filter((t) => !t.done), task, ...list.filter((t) => t.done)]);
-      setError(null);
-      return task;
-    } catch {
-      setError("Couldn't add the task.");
-      return null;
-    }
-  }, []);
+  const add = useCallback(
+    async (title: string, estimatedPomodoros: number) => {
+      try {
+        const task = await repo.createTask({ title, estimatedPomodoros });
+        if (!task) throw new Error("invalid task");
+        setTasks((list) => [...list.filter((t) => !t.done), task, ...list.filter((t) => t.done)]);
+        setError(null);
+        return task;
+      } catch {
+        setError("Couldn't add the task.");
+        return null;
+      }
+    },
+    [repo],
+  );
 
   const update = useCallback(
     (id: number, patch: Partial<Pick<Task, "title" | "estimatedPomodoros" | "done">>) =>
@@ -75,23 +68,23 @@ export function useTasks(initial: Task[]) {
               : t,
           ),
         async () => {
-          const saved = await request<Task>(`/api/tasks/${id}`, {
-            method: "PATCH",
-            body: JSON.stringify({ ...patch, localDate: localDate(Date.now()) }),
-          });
+          const saved = await repo.updateTask(id, patch, localDate(Date.now()));
+          if (!saved) throw new Error("task not found");
           setTasks((list) => list.map((t) => (t.id === id ? saved : t)));
         },
       ),
-    [mutate],
+    [mutate, repo],
   );
 
   const remove = useCallback(
     (id: number) =>
       mutate(
         (list) => list.filter((t) => t.id !== id),
-        () => request<void>(`/api/tasks/${id}`, { method: "DELETE" }),
+        async () => {
+          await repo.deleteTask(id);
+        },
       ),
-    [mutate],
+    [mutate, repo],
   );
 
   return { tasks, error, refresh, add, update, remove };
