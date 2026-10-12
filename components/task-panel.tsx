@@ -1,8 +1,28 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type Announcements,
+  type DragEndEvent,
+  type Modifier,
+  type UniqueIdentifier,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import { useId, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import type { Task } from "@/lib/types";
-import { CheckIcon, MinusIcon, PlusIcon, TomatoIcon, TrashIcon } from "./icons";
+import { CheckIcon, GripIcon, MinusIcon, PlusIcon, TomatoIcon, TrashIcon } from "./icons";
 
 interface TaskPanelProps {
   tasks: Task[];
@@ -12,9 +32,20 @@ interface TaskPanelProps {
   onToggle: (task: Task) => void;
   onRemove: (task: Task) => void;
   onSelect: (taskId: number | null) => void;
+  /** New order of the open tasks, first to last. */
+  onReorder: (ids: number[]) => void;
 }
 
-export function TaskPanel({ tasks, activeTaskId, error, onAdd, onToggle, onRemove, onSelect }: TaskPanelProps) {
+export function TaskPanel({
+  tasks,
+  activeTaskId,
+  error,
+  onAdd,
+  onToggle,
+  onRemove,
+  onSelect,
+  onReorder,
+}: TaskPanelProps) {
   const [title, setTitle] = useState("");
   const [estimate, setEstimate] = useState(1);
   const [saving, setSaving] = useState(false);
@@ -105,24 +136,22 @@ export function TaskPanel({ tasks, activeTaskId, error, onAdd, onToggle, onRemov
             Add a task, then pick it so your focus time is tracked against it.
           </p>
         ) : (
-          <ul className="flex flex-col gap-2">
-            {open.map((task) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                active={task.id === activeTaskId}
-                onToggle={() => {
-                  if (task.id === activeTaskId) onSelect(null);
-                  onToggle(task);
-                }}
-                onRemove={() => {
-                  if (task.id === activeTaskId) onSelect(null);
-                  onRemove(task);
-                }}
-                onSelect={() => onSelect(task.id === activeTaskId ? null : task.id)}
-              />
-            ))}
-          </ul>
+          <SortableTaskList
+            tasks={open}
+            onReorder={onReorder}
+            rowProps={(task) => ({
+              active: task.id === activeTaskId,
+              onToggle: () => {
+                if (task.id === activeTaskId) onSelect(null);
+                onToggle(task);
+              },
+              onRemove: () => {
+                if (task.id === activeTaskId) onSelect(null);
+                onRemove(task);
+              },
+              onSelect: () => onSelect(task.id === activeTaskId ? null : task.id),
+            })}
+          />
         )}
       </section>
 
@@ -148,22 +177,139 @@ export function TaskPanel({ tasks, activeTaskId, error, onAdd, onToggle, onRemov
   );
 }
 
+// ---------------------------------------------------------------------------
+// Drag and drop
+
+type RowProps = Omit<TaskRowProps, "task" | "drag">;
+
+const verticalOnly: Modifier = ({ transform }) => ({ ...transform, x: 0 });
+
+/**
+ * Reorderable list. Dragging starts from the grip handle only, so tapping a
+ * task (to select it) and scrolling on phones keep working. Pointer, touch
+ * and keyboard (Space/Enter, arrows, Space/Enter or Escape) are supported.
+ */
+function SortableTaskList({
+  tasks,
+  onReorder,
+  rowProps,
+}: {
+  tasks: Task[];
+  onReorder: (ids: number[]) => void;
+  rowProps: (task: Task) => RowProps;
+}) {
+  const contextId = useId();
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const ids = tasks.map((t) => t.id);
+
+  const title = (id: UniqueIdentifier) => tasks.find((t) => t.id === id)?.title ?? "Task";
+  const position = (id: UniqueIdentifier) => `position ${ids.indexOf(Number(id)) + 1} of ${ids.length}`;
+  const announcements: Announcements = {
+    onDragStart: ({ active }) => `Picked up "${title(active.id)}", ${position(active.id)}.`,
+    onDragOver: ({ active, over }) =>
+      over ? `"${title(active.id)}" moved to ${position(over.id)}.` : `"${title(active.id)}" is outside the list.`,
+    onDragEnd: ({ active, over }) =>
+      over ? `"${title(active.id)}" dropped at ${position(over.id)}.` : `"${title(active.id)}" dropped.`,
+    onDragCancel: ({ active }) => `Reordering cancelled. "${title(active.id)}" is back where it was.`,
+  };
+
+  function handleDragEnd({ active, over }: DragEndEvent) {
+    if (!over || active.id === over.id) return;
+    onReorder(arrayMove(ids, ids.indexOf(Number(active.id)), ids.indexOf(Number(over.id))));
+  }
+
+  return (
+    <DndContext
+      id={contextId}
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      modifiers={[verticalOnly]}
+      onDragEnd={handleDragEnd}
+      accessibility={{
+        announcements,
+        screenReaderInstructions: {
+          draggable:
+            "To reorder, press Space or Enter, move with the up and down arrow keys, then press Space or Enter to drop, or Escape to cancel.",
+        },
+      }}
+    >
+      <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+        <ul className="flex flex-col gap-2">
+          {tasks.map((task) => (
+            <SortableTaskRow key={task.id} task={task} enabled={tasks.length > 1} {...rowProps(task)} />
+          ))}
+        </ul>
+      </SortableContext>
+    </DndContext>
+  );
+}
+
+function SortableTaskRow({ task, enabled, ...props }: RowProps & { task: Task; enabled: boolean }) {
+  const { setNodeRef, setActivatorNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
+    id: task.id,
+    disabled: !enabled,
+  });
+
+  return (
+    <TaskRow
+      {...props}
+      task={task}
+      drag={{
+        setRowRef: setNodeRef,
+        style: { transform: CSS.Translate.toString(transform), transition },
+        dragging: isDragging,
+        handle: enabled ? (
+          <button
+            type="button"
+            ref={setActivatorNodeRef}
+            {...attributes}
+            {...listeners}
+            aria-label={`Reorder "${task.title}"`}
+            className={`-ml-1.5 grid h-9 w-6 shrink-0 touch-none place-items-center rounded-lg text-ink-soft/60 hover:bg-ink/5 hover:text-ink focus-visible:outline-2 focus-visible:outline-tomato ${
+              isDragging ? "cursor-grabbing" : "cursor-grab"
+            }`}
+          >
+            <GripIcon />
+          </button>
+        ) : null,
+      }}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+
+/** Present when the row is in the reorderable list. */
+interface DragProps {
+  setRowRef: (node: HTMLElement | null) => void;
+  style: CSSProperties;
+  dragging: boolean;
+  handle: ReactNode;
+}
+
 interface TaskRowProps {
   task: Task;
   active: boolean;
+  drag?: DragProps;
   onToggle: () => void;
   onRemove: () => void;
   onSelect?: () => void;
 }
 
-function TaskRow({ task, active, onToggle, onRemove, onSelect }: TaskRowProps) {
+function TaskRow({ task, active, drag, onToggle, onRemove, onSelect }: TaskRowProps) {
   const over = task.spentPomodoros > task.estimatedPomodoros;
   return (
     <li
-      className={`group flex items-center gap-3 rounded-2xl border bg-white px-3 py-2.5 transition-colors ${
+      ref={drag?.setRowRef}
+      style={drag?.style}
+      className={`group relative flex items-center gap-3 rounded-2xl border bg-white px-3 py-2.5 transition-colors ${
         active ? "border-tomato shadow-[0_0_0_1px_var(--color-tomato)]" : "border-ink/10"
-      }`}
+      } ${drag?.dragging ? "z-10 shadow-lg shadow-ink/15 ring-2 ring-tomato/40" : ""}`}
     >
+      {drag?.handle}
       <button
         type="button"
         role="checkbox"

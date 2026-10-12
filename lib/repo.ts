@@ -171,7 +171,9 @@ export function createRepo(db: SqlDriver) {
       const rows = await db.all<TaskRow>(
         `${TASK_SELECT}
          WHERE t.done = 0 OR t.completed_at >= ?
-         ORDER BY t.done ASC, CASE WHEN t.done = 0 THEN t.created_at ELSE -t.completed_at END ASC`,
+         ORDER BY t.done ASC,
+                  CASE WHEN t.done = 0 THEN t.sort_order ELSE -t.completed_at END ASC,
+                  t.id ASC`,
         [since],
       );
       return rows.map(toTask);
@@ -181,8 +183,10 @@ export function createRepo(db: SqlDriver) {
       const title = cleanTitle(input.title);
       if (!title) return null;
       const estimate = cleanEstimate(input.estimatedPomodoros) ?? 1;
+      // New tasks go to the bottom of the list.
       const { lastInsertRowid } = await db.run(
-        "INSERT INTO tasks (title, estimated_pomodoros, created_at) VALUES (?, ?, ?)",
+        `INSERT INTO tasks (title, estimated_pomodoros, created_at, sort_order)
+         VALUES (?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tasks))`,
         [title, estimate, Date.now()],
       );
       return getTask(lastInsertRowid);
@@ -216,6 +220,14 @@ export function createRepo(db: SqlDriver) {
 
       if (sets.length > 0) await db.run(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`, [...values, id]);
       return getTask(id);
+    },
+
+    /** Saves the to-do order: `ids[0]` first. Ids not in the list keep their position value. */
+    async reorderTasks(ids: number[]): Promise<void> {
+      const valid = ids.filter((id) => Number.isInteger(id) && id > 0);
+      await db.batch(
+        valid.map((id, index) => ({ sql: "UPDATE tasks SET sort_order = ? WHERE id = ?", params: [index + 1, id] })),
+      );
     },
 
     async deleteTask(id: number): Promise<boolean> {

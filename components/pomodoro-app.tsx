@@ -192,6 +192,7 @@ export function PomodoroApp({ db, initialSettings, initialTasks }: PomodoroAppPr
       onToggle={(t) => void tasks.update(t.id, { done: !t.done })}
       onRemove={(t) => void tasks.remove(t.id)}
       onSelect={selectTask}
+      onReorder={(ids) => void tasks.reorder(ids)}
     />
   );
 

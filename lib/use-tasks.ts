@@ -76,6 +76,20 @@ export function useTasks(repo: Repo, initial: Task[]) {
     [mutate, repo],
   );
 
+  /** Applies a new order for the open tasks (done tasks stay below them). */
+  const reorder = useCallback(
+    (openIds: number[]) =>
+      mutate(
+        (list) => {
+          const byId = new Map(list.map((t) => [t.id, t]));
+          const open = openIds.map((id) => byId.get(id)).filter((t): t is Task => !!t && !t.done);
+          return [...open, ...list.filter((t) => t.done || !openIds.includes(t.id))];
+        },
+        () => repo.reorderTasks(openIds),
+      ),
+    [mutate, repo],
+  );
+
   const remove = useCallback(
     (id: number) =>
       mutate(
@@ -87,5 +101,5 @@ export function useTasks(repo: Repo, initial: Task[]) {
     [mutate, repo],
   );
 
-  return { tasks, error, refresh, add, update, remove };
+  return { tasks, error, refresh, add, update, reorder, remove };
 }
