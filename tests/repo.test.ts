@@ -55,6 +55,18 @@ describe("tasks", () => {
     assert.equal((await repo.listTasks(Date.now() + 60_000)).length, 0); // completed before `since`
   });
 
+  it("edits a task's title and estimate, rejecting invalid values", async () => {
+    const task = (await repo.createTask({ title: "Draft", estimatedPomodoros: 2 }))!;
+    const edited = await repo.updateTask(task.id, { title: "  Final draft  ", estimatedPomodoros: 4 }, "2026-10-12");
+    assert.equal(edited?.title, "Final draft");
+    assert.equal(edited?.estimatedPomodoros, 4);
+
+    assert.equal(await repo.updateTask(task.id, { title: "   " }, "2026-10-12"), null);
+    assert.equal(await repo.updateTask(task.id, { estimatedPomodoros: 0 }, "2026-10-12"), null);
+    const [unchanged] = await repo.listTasks(0);
+    assert.deepEqual([unchanged.title, unchanged.estimatedPomodoros], ["Final draft", 4]);
+  });
+
   it("keeps the user's order for open tasks; new tasks go last", async () => {
     const a = (await repo.createTask({ title: "A" }))!;
     const b = (await repo.createTask({ title: "B" }))!;
