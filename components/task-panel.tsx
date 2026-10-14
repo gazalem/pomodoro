@@ -20,9 +20,9 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useId, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import type { Task } from "@/lib/types";
-import { CheckIcon, GripIcon, MinusIcon, PlusIcon, TomatoIcon, TrashIcon } from "./icons";
+import { CheckIcon, GripIcon, MinusIcon, PencilIcon, PlusIcon, TomatoIcon, TrashIcon } from "./icons";
 
 interface TaskPanelProps {
   tasks: Task[];
@@ -34,6 +34,7 @@ interface TaskPanelProps {
   onSelect: (taskId: number | null) => void;
   /** New order of the open tasks, first to last. */
   onReorder: (ids: number[]) => void;
+  onEdit: (task: Task, changes: { title: string; estimatedPomodoros: number }) => void;
 }
 
 export function TaskPanel({
@@ -45,8 +46,10 @@ export function TaskPanel({
   onRemove,
   onSelect,
   onReorder,
+  onEdit,
 }: TaskPanelProps) {
   const [title, setTitle] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [estimate, setEstimate] = useState(1);
   const [saving, setSaving] = useState(false);
   const id = useId(); // the panel renders twice (sidebar + sheet), so ids must be unique
@@ -69,6 +72,19 @@ export function TaskPanel({
     }
   }
 
+  // Only one task is edited at a time; opening another closes the first.
+  const editProps = (task: Task): EditProps => ({
+    editing: editingId === task.id,
+    onStartEdit: () => setEditingId(task.id),
+    onCancelEdit: () => setEditingId(null),
+    onSaveEdit: (changes) => {
+      setEditingId(null);
+      if (changes.title !== task.title || changes.estimatedPomodoros !== task.estimatedPomodoros) {
+        onEdit(task, changes);
+      }
+    },
+  });
+
   return (
     <div className="flex flex-col gap-4">
       <form onSubmit={submit} className="flex flex-col gap-2 rounded-2xl bg-ink/[0.04] p-3">
@@ -85,29 +101,7 @@ export function TaskPanel({
           className="w-full rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-base text-ink placeholder:text-ink-soft/70 focus:border-tomato focus:outline-none"
         />
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1 text-sm text-ink-soft">
-            <span className="mr-1">Estimate</span>
-            <button
-              type="button"
-              onClick={() => setEstimate((n) => Math.max(1, n - 1))}
-              className="grid size-8 place-items-center rounded-full border border-ink/10 bg-white hover:bg-ink/5"
-              aria-label="Fewer pomodoros"
-            >
-              <MinusIcon />
-            </button>
-            <span className="flex w-10 items-center justify-center gap-0.5 font-semibold text-ink tabular-nums" aria-live="polite">
-              {estimate}
-              <TomatoIcon className="text-tomato" />
-            </span>
-            <button
-              type="button"
-              onClick={() => setEstimate((n) => Math.min(20, n + 1))}
-              className="grid size-8 place-items-center rounded-full border border-ink/10 bg-white hover:bg-ink/5"
-              aria-label="More pomodoros"
-            >
-              <PlusIcon />
-            </button>
-          </div>
+          <EstimateStepper value={estimate} onChange={setEstimate} label="Estimate" />
           <button
             type="submit"
             disabled={!title.trim() || saving}
@@ -150,6 +144,7 @@ export function TaskPanel({
                 onRemove(task);
               },
               onSelect: () => onSelect(task.id === activeTaskId ? null : task.id),
+              ...editProps(task),
             })}
           />
         )}
@@ -168,6 +163,7 @@ export function TaskPanel({
                 active={false}
                 onToggle={() => onToggle(task)}
                 onRemove={() => onRemove(task)}
+                {...editProps(task)}
               />
             ))}
           </ul>
@@ -239,7 +235,7 @@ function SortableTaskList({
       <SortableContext items={ids} strategy={verticalListSortingStrategy}>
         <ul className="flex flex-col gap-2">
           {tasks.map((task) => (
-            <SortableTaskRow key={task.id} task={task} enabled={tasks.length > 1} {...rowProps(task)} />
+            <SortableTaskRow key={task.id} task={task} sortable={tasks.length > 1} {...rowProps(task)} />
           ))}
         </ul>
       </SortableContext>
@@ -247,7 +243,9 @@ function SortableTaskList({
   );
 }
 
-function SortableTaskRow({ task, enabled, ...props }: RowProps & { task: Task; enabled: boolean }) {
+function SortableTaskRow({ task, sortable, ...props }: RowProps & { task: Task; sortable: boolean }) {
+  // A row being edited stays put so its inputs can be used normally.
+  const enabled = sortable && !props.editing;
   const { setNodeRef, setActivatorNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
     id: task.id,
     disabled: !enabled,
@@ -290,7 +288,14 @@ interface DragProps {
   handle: ReactNode;
 }
 
-interface TaskRowProps {
+interface EditProps {
+  editing: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onSaveEdit: (changes: { title: string; estimatedPomodoros: number }) => void;
+}
+
+interface TaskRowProps extends EditProps {
   task: Task;
   active: boolean;
   drag?: DragProps;
@@ -299,8 +304,43 @@ interface TaskRowProps {
   onSelect?: () => void;
 }
 
-function TaskRow({ task, active, drag, onToggle, onRemove, onSelect }: TaskRowProps) {
+const ROW_ACTION =
+  "grid size-8 shrink-0 place-items-center rounded-full text-ink-soft opacity-60 hover:bg-ink/5 hover:opacity-100 focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100";
+
+function TaskRow({
+  task,
+  active,
+  drag,
+  editing,
+  onToggle,
+  onRemove,
+  onSelect,
+  onStartEdit,
+  onCancelEdit,
+  onSaveEdit,
+}: TaskRowProps) {
   const over = task.spentPomodoros > task.estimatedPomodoros;
+
+  // Return keyboard focus to the pencil button when the editor closes.
+  const editButton = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(editing);
+  useEffect(() => {
+    if (wasEditing.current && !editing) editButton.current?.focus();
+    wasEditing.current = editing;
+  }, [editing]);
+
+  if (editing) {
+    return (
+      <li
+        ref={drag?.setRowRef}
+        style={drag?.style}
+        className="rounded-2xl border border-tomato bg-white p-3 shadow-[0_0_0_1px_var(--color-tomato)]"
+      >
+        <TaskEditor task={task} onSave={onSaveEdit} onCancel={onCancelEdit} />
+      </li>
+    );
+  }
+
   return (
     <li
       ref={drag?.setRowRef}
@@ -339,14 +379,135 @@ function TaskRow({ task, active, drag, onToggle, onRemove, onSelect }: TaskRowPr
         </span>
       </button>
 
+      <div className="-mr-1 flex shrink-0 items-center">
+        <button
+          type="button"
+          ref={editButton}
+          onClick={onStartEdit}
+          aria-label={`Edit "${task.title}"`}
+          className={`${ROW_ACTION} hover:text-ink`}
+        >
+          <PencilIcon />
+        </button>
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={`Delete "${task.title}"`}
+          className={`${ROW_ACTION} hover:text-tomato-deep`}
+        >
+          <TrashIcon />
+        </button>
+      </div>
+    </li>
+  );
+}
+
+/** Inline editor for a task's title and estimate. Enter saves, Escape cancels. */
+function TaskEditor({
+  task,
+  onSave,
+  onCancel,
+}: {
+  task: Task;
+  onSave: (changes: { title: string; estimatedPomodoros: number }) => void;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState(task.title);
+  const [estimate, setEstimate] = useState(task.estimatedPomodoros);
+  const input = useRef<HTMLInputElement>(null);
+  const id = useId();
+  const trimmed = title.trim();
+
+  useEffect(() => {
+    input.current?.focus();
+    input.current?.select();
+  }, []);
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    if (trimmed) onSave({ title: trimmed, estimatedPomodoros: estimate });
+  }
+
+  function onKeyDown(e: KeyboardEvent) {
+    if (e.key !== "Escape") return;
+    // Cancel the edit only; don't let Escape also close the tasks sheet.
+    e.preventDefault();
+    e.stopPropagation();
+    onCancel();
+  }
+
+  return (
+    <form onSubmit={submit} onKeyDown={onKeyDown} className="flex flex-col gap-2" aria-label={`Edit "${task.title}"`}>
+      <label htmlFor={`${id}-title`} className="sr-only">
+        Task title
+      </label>
+      <input
+        id={`${id}-title`}
+        ref={input}
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        maxLength={200}
+        autoComplete="off"
+        aria-invalid={!trimmed}
+        className="w-full rounded-xl border border-ink/15 bg-paper px-3 py-2 text-base text-ink focus:border-tomato focus:outline-none"
+      />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <EstimateStepper value={estimate} onChange={setEstimate} label="Estimate" />
+        <div className="ml-auto flex gap-1.5">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-full px-3.5 py-1.5 text-sm font-medium text-ink-soft hover:bg-ink/5"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!trimmed}
+            className="rounded-full bg-tomato px-4 py-1.5 text-sm font-semibold text-white hover:bg-tomato-deep disabled:opacity-40"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
+const MAX_ESTIMATE = 20;
+
+/** "− 3🍅 +" control for a pomodoro estimate. */
+function EstimateStepper({
+  value,
+  onChange,
+  label,
+  min = 1,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+  label: string;
+  min?: number;
+}) {
+  const step = "grid size-8 place-items-center rounded-full border border-ink/10 bg-white hover:bg-ink/5 disabled:opacity-40";
+  return (
+    <div className="flex items-center gap-1 text-sm text-ink-soft" role="group" aria-label={`${label}: ${value} pomodoros`}>
+      <span className="mr-1">{label}</span>
+      <button type="button" onClick={() => onChange(Math.max(min, value - 1))} disabled={value <= min} className={step} aria-label="Fewer pomodoros">
+        <MinusIcon />
+      </button>
+      <span className="flex w-10 items-center justify-center gap-0.5 font-semibold text-ink tabular-nums" aria-live="polite">
+        {value}
+        <TomatoIcon className="text-tomato" />
+      </span>
       <button
         type="button"
-        onClick={onRemove}
-        aria-label={`Delete "${task.title}"`}
-        className="grid size-8 shrink-0 place-items-center rounded-full text-ink-soft opacity-60 hover:bg-ink/5 hover:text-tomato-deep hover:opacity-100 focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+        onClick={() => onChange(Math.min(MAX_ESTIMATE, value + 1))}
+        disabled={value >= MAX_ESTIMATE}
+        className={step}
+        aria-label="More pomodoros"
       >
-        <TrashIcon />
+        <PlusIcon />
       </button>
-    </li>
+    </div>
   );
 }
