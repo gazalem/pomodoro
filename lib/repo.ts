@@ -1,6 +1,7 @@
+import { isCategoryColor, MAX_CATEGORIES, nextFreeColor, type CategoryColor } from "./categories";
 import { first, type SqlDriver, type SqlParam } from "./db/driver";
 import { normalizeSettings } from "./settings";
-import type { PhaseType, SessionLog, SessionStatus, Settings, Task, TodayStats } from "./types";
+import type { Category, PhaseType, SessionLog, SessionStatus, Settings, Task, TodayStats } from "./types";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PHASE_TYPES: readonly PhaseType[] = ["focus", "short_break", "long_break", "lunch"];
@@ -27,13 +28,14 @@ interface TaskRow {
   title: string;
   estimated_pomodoros: number;
   spent_pomodoros: number;
+  category_id: number | null;
   done: number;
   created_at: number;
   completed_at: number | null;
 }
 
 const TASK_SELECT = `
-  SELECT t.id, t.title, t.estimated_pomodoros, t.done, t.created_at, t.completed_at,
+  SELECT t.id, t.title, t.estimated_pomodoros, t.category_id, t.done, t.created_at, t.completed_at,
          (SELECT COUNT(*) FROM sessions s
            WHERE s.task_id = t.id AND s.type = 'focus' AND s.status = 'completed') AS spent_pomodoros
   FROM tasks t`;
@@ -44,6 +46,7 @@ function toTask(row: TaskRow): Task {
     title: row.title,
     estimatedPomodoros: row.estimated_pomodoros,
     spentPomodoros: row.spent_pomodoros,
+    categoryId: row.category_id,
     done: row.done === 1,
     createdAt: row.created_at,
     completedAt: row.completed_at,
@@ -54,6 +57,18 @@ function cleanTitle(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const title = value.trim().slice(0, 200);
   return title || null;
+}
+
+function cleanCategoryName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const name = value.trim().replace(/\s+/g, " ").slice(0, 40);
+  return name || null;
+}
+
+/** undefined = leave unchanged, null = no category, number = category id. */
+function cleanCategoryId(value: unknown): number | null | undefined {
+  if (value === null) return null;
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 function cleanEstimate(value: unknown): number | null {
@@ -90,9 +105,20 @@ export interface HourPoint {
   pomodoros: number;
 }
 
+export interface CategoryFocus {
+  /** null = focus not linked to a categorized task. */
+  categoryId: number | null;
+  name: string;
+  color: CategoryColor | null;
+  focusSeconds: number;
+  pomodoros: number;
+}
+
 export interface TaskPerformance {
   id: number;
   title: string;
+  categoryName: string | null;
+  categoryColor: CategoryColor | null;
   estimated: number;
   spentInRange: number;
   spentTotal: number;
@@ -127,6 +153,7 @@ export interface Report {
   };
   days: DayPoint[];
   hours: HourPoint[];
+  categories: CategoryFocus[];
   tasks: TaskPerformance[];
   recent: SessionRow[];
 }
@@ -179,15 +206,21 @@ export function createRepo(db: SqlDriver) {
       return rows.map(toTask);
     },
 
-    async createTask(input: { title?: unknown; estimatedPomodoros?: unknown }): Promise<Task | null> {
+    async createTask(input: {
+      title?: unknown;
+      estimatedPomodoros?: unknown;
+      categoryId?: unknown;
+    }): Promise<Task | null> {
       const title = cleanTitle(input.title);
       if (!title) return null;
       const estimate = cleanEstimate(input.estimatedPomodoros) ?? 1;
-      // New tasks go to the bottom of the list.
+      const categoryId = cleanCategoryId(input.categoryId) ?? null;
+      // New tasks go to the bottom of the list. An unknown category id becomes NULL.
       const { lastInsertRowid } = await db.run(
-        `INSERT INTO tasks (title, estimated_pomodoros, created_at, sort_order)
-         VALUES (?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tasks))`,
-        [title, estimate, Date.now()],
+        `INSERT INTO tasks (title, estimated_pomodoros, category_id, created_at, sort_order)
+         VALUES (?, ?, (SELECT id FROM categories WHERE id = ?), ?,
+                 (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM tasks))`,
+        [title, estimate, categoryId, Date.now()],
       );
       return getTask(lastInsertRowid);
     },
@@ -195,7 +228,7 @@ export function createRepo(db: SqlDriver) {
     /** `localDate` is the user's "YYYY-MM-DD", recorded when a task is completed. */
     async updateTask(
       id: number,
-      patch: { title?: unknown; estimatedPomodoros?: unknown; done?: unknown },
+      patch: { title?: unknown; estimatedPomodoros?: unknown; done?: unknown; categoryId?: unknown },
       localDate: string,
     ): Promise<Task | null> {
       const sets: string[] = [];
@@ -213,6 +246,12 @@ export function createRepo(db: SqlDriver) {
         sets.push("estimated_pomodoros = ?");
         values.push(estimate);
       }
+      if (patch.categoryId !== undefined) {
+        const categoryId = cleanCategoryId(patch.categoryId);
+        if (categoryId === undefined) return null;
+        sets.push("category_id = (SELECT id FROM categories WHERE id = ?)");
+        values.push(categoryId);
+      }
       if (typeof patch.done === "boolean") {
         sets.push("done = ?", "completed_at = ?", "completed_date = ?");
         values.push(...(patch.done ? [1, Date.now(), localDate] : [0, null, null]));
@@ -221,6 +260,61 @@ export function createRepo(db: SqlDriver) {
       if (sets.length > 0) await db.run(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`, [...values, id]);
       return getTask(id);
     },
+
+    // -- Categories ---------------------------------------------------------
+
+    async listCategories(): Promise<Category[]> {
+      return db.all<Category>("SELECT id, name, color FROM categories ORDER BY sort_order, id");
+    },
+
+    /** Throws an Error with a user-facing message when the name is taken or the limit is reached. */
+    async createCategory(input: { name?: unknown }): Promise<Category> {
+      const name = cleanCategoryName(input.name);
+      if (!name) throw new Error("Give the category a name.");
+      const existing = await db.all<{ name: string; color: string }>("SELECT name, color FROM categories");
+      if (existing.length >= MAX_CATEGORIES) throw new Error(`You can have up to ${MAX_CATEGORIES} categories.`);
+      if (existing.some((c) => c.name.toLowerCase() === name.toLowerCase())) {
+        throw new Error(`There's already a "${name}" category.`);
+      }
+      const color = nextFreeColor(existing.map((c) => c.color));
+      const { lastInsertRowid } = await db.run(
+        `INSERT INTO categories (name, color, sort_order, created_at)
+         VALUES (?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM categories), ?)`,
+        [name, color, Date.now()],
+      );
+      return { id: lastInsertRowid, name, color };
+    },
+
+    async updateCategory(id: number, patch: { name?: unknown; color?: unknown }): Promise<Category | null> {
+      const sets: string[] = [];
+      const values: SqlParam[] = [];
+      if (patch.name !== undefined) {
+        const name = cleanCategoryName(patch.name);
+        if (!name) throw new Error("Give the category a name.");
+        const clash = await first<{ id: number }>(
+          db,
+          "SELECT id FROM categories WHERE name = ? COLLATE NOCASE AND id != ?",
+          [name, id],
+        );
+        if (clash) throw new Error(`There's already a "${name}" category.`);
+        sets.push("name = ?");
+        values.push(name);
+      }
+      if (patch.color !== undefined) {
+        if (!isCategoryColor(patch.color)) return null;
+        sets.push("color = ?");
+        values.push(patch.color);
+      }
+      if (sets.length > 0) await db.run(`UPDATE categories SET ${sets.join(", ")} WHERE id = ?`, [...values, id]);
+      return (await first<Category>(db, "SELECT id, name, color FROM categories WHERE id = ?", [id])) ?? null;
+    },
+
+    /** Deletes a category; its tasks are kept and become uncategorized. */
+    async deleteCategory(id: number): Promise<boolean> {
+      return (await db.run("DELETE FROM categories WHERE id = ?", [id])).changes > 0;
+    },
+
+    // -- Tasks ---------------------------------------------------------------
 
     /** Saves the to-do order: `ids[0]` first. Ids not in the list keep their position value. */
     async reorderTasks(ids: number[]): Promise<void> {
@@ -319,16 +413,46 @@ export function createRepo(db: SqlDriver) {
 
       const taskRows = await db.all<Omit<TaskPerformance, "done"> & { done: number }>(
         `SELECT t.id, t.title, t.estimated_pomodoros AS estimated, t.done, t.completed_date AS completedDate,
+                c.name AS categoryName, c.color AS categoryColor,
                 SUM(s.type = 'focus' AND s.status = 'completed' AND s.local_date BETWEEN ? AND ?) AS spentInRange,
                 SUM(s.type = 'focus' AND s.status = 'completed') AS spentTotal
          FROM tasks t
          LEFT JOIN sessions s ON s.task_id = t.id
+         LEFT JOIN categories c ON c.id = t.category_id
          GROUP BY t.id
          HAVING spentInRange > 0 OR (t.done = 1 AND t.completed_date BETWEEN ? AND ?)
          ORDER BY spentInRange DESC, t.title ASC
          LIMIT 50`,
         [from, to, from, to],
       );
+
+      // Focus attributed through each session's task to the task's current category.
+      const categoryRows = await db.all<{
+        categoryId: number | null;
+        name: string | null;
+        color: CategoryColor | null;
+        focusSeconds: number;
+        pomodoros: number;
+      }>(
+        `SELECT c.id AS categoryId, c.name, c.color,
+                SUM(s.actual_seconds) AS focusSeconds,
+                SUM(s.status = 'completed') AS pomodoros
+         FROM sessions s
+         LEFT JOIN tasks t ON t.id = s.task_id
+         LEFT JOIN categories c ON c.id = t.category_id
+         WHERE s.type = 'focus' AND s.local_date BETWEEN ? AND ?
+         GROUP BY c.id
+         HAVING SUM(s.actual_seconds) > 0
+         ORDER BY focusSeconds DESC, c.sort_order ASC`,
+        [from, to],
+      );
+      const categories: CategoryFocus[] = categoryRows.map((r) => ({
+        categoryId: r.categoryId,
+        name: r.name ?? "Uncategorized",
+        color: r.color,
+        focusSeconds: r.focusSeconds,
+        pomodoros: r.pomodoros,
+      }));
 
       const recent = await db.all<SessionRow>(`${SESSION_SELECT} ORDER BY s.started_at DESC LIMIT 40`, [from, to]);
 
@@ -348,6 +472,7 @@ export function createRepo(db: SqlDriver) {
         },
         days,
         hours,
+        categories,
         tasks: taskRows.map((t) => ({
           ...t,
           spentInRange: t.spentInRange ?? 0,

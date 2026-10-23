@@ -43,9 +43,9 @@ export function useTasks(repo: Repo, initial: Task[]) {
   );
 
   const add = useCallback(
-    async (title: string, estimatedPomodoros: number) => {
+    async (title: string, estimatedPomodoros: number, categoryId: number | null) => {
       try {
-        const task = await repo.createTask({ title, estimatedPomodoros });
+        const task = await repo.createTask({ title, estimatedPomodoros, categoryId });
         if (!task) throw new Error("invalid task");
         setTasks((list) => [...list.filter((t) => !t.done), task, ...list.filter((t) => t.done)]);
         setError(null);
@@ -59,7 +59,7 @@ export function useTasks(repo: Repo, initial: Task[]) {
   );
 
   const update = useCallback(
-    (id: number, patch: Partial<Pick<Task, "title" | "estimatedPomodoros" | "done">>) =>
+    (id: number, patch: Partial<Pick<Task, "title" | "estimatedPomodoros" | "categoryId" | "done">>) =>
       mutate(
         (list) =>
           list.map((t) =>

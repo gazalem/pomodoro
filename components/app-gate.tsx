@@ -2,12 +2,13 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { useDatabase, type DatabaseState } from "@/lib/db/browser";
-import type { Settings, Task } from "@/lib/types";
+import type { Category, Settings, Task } from "@/lib/types";
 import { PomodoroApp } from "./pomodoro-app";
 
 interface Loaded {
   settings: Settings;
   tasks: Task[];
+  categories: Category[];
 }
 
 /** Opens the in-browser database, loads the initial data, then shows the app. */
@@ -21,8 +22,9 @@ export function AppGate() {
     let active = true;
     const startOfDay = new Date();
     startOfDay.setHours(0, 0, 0, 0);
-    Promise.all([state.db.repo.getSettings(), state.db.repo.listTasks(startOfDay.getTime())]).then(
-      ([settings, tasks]) => active && setLoaded({ settings, tasks }),
+    const { repo } = state.db;
+    Promise.all([repo.getSettings(), repo.listTasks(startOfDay.getTime()), repo.listCategories()]).then(
+      ([settings, tasks, categories]) => active && setLoaded({ settings, tasks, categories }),
       (error: unknown) => active && setLoadError(error instanceof Error ? error.message : String(error)),
     );
     return () => {
@@ -42,7 +44,14 @@ export function AppGate() {
   }
   if (state.status !== "ready" || !loaded) return <AppShell />;
 
-  return <PomodoroApp db={state.db} initialSettings={loaded.settings} initialTasks={loaded.tasks} />;
+  return (
+    <PomodoroApp
+      db={state.db}
+      initialSettings={loaded.settings}
+      initialTasks={loaded.tasks}
+      initialCategories={loaded.categories}
+    />
+  );
 }
 
 /** Placeholder with the same silhouette as the timer, shown while the database opens. */

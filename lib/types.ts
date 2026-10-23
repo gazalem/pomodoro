@@ -1,3 +1,5 @@
+import type { CategoryColor } from "./categories";
+
 export type PhaseType = "focus" | "short_break" | "long_break" | "lunch";
 
 export type SessionStatus = "completed" | "skipped" | "stopped";
@@ -34,6 +36,7 @@ export interface Task {
   id: number;
   title: string;
   estimatedPomodoros: number;
+  categoryId: number | null;
   /** Completed focus sessions linked to this task (all time). */
   spentPomodoros: number;
   done: boolean;
@@ -60,4 +63,10 @@ export interface SessionLog {
 export interface TodayStats {
   pomodoros: number;
   focusSeconds: number;
+}
+
+export interface Category {
+  id: number;
+  name: string;
+  color: CategoryColor;
 }

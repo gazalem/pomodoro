@@ -1,6 +1,7 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { CATEGORY_HEX, type CategoryColor } from "@/lib/categories";
 import { formatDuration, formatTimeOfDay } from "@/lib/format";
 import type { Report } from "@/lib/repo";
 import type { PhaseType, SessionStatus } from "@/lib/types";
@@ -120,6 +121,14 @@ export function ReportView({ report, onExport }: { report: Report; onExport: () 
         </details>
       </Card>
 
+      <Card>
+        <h2 className="font-semibold">Focus by category</h2>
+        <p className="mb-4 text-sm text-ink-soft dark:text-mist-soft">
+          Where your focus time went, by each task&apos;s category.
+        </p>
+        <CategoryBreakdown categories={report.categories} />
+      </Card>
+
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <h2 className="font-semibold">When you focus</h2>
@@ -215,7 +224,15 @@ function TaskLine({ task }: { task: Report["tasks"][number] }) {
   return (
     <li className="flex flex-col gap-1.5 py-2.5">
       <div className="flex items-baseline justify-between gap-3">
-        <span className={`truncate ${task.done ? "text-ink-soft line-through dark:text-mist-soft" : ""}`}>{task.title}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          <span className={`truncate ${task.done ? "text-ink-soft line-through dark:text-mist-soft" : ""}`}>{task.title}</span>
+          {task.categoryName && (
+            <span className="flex shrink-0 items-center gap-1 text-xs text-ink-soft dark:text-mist-soft">
+              <Swatch color={task.categoryColor} className="size-2" />
+              {task.categoryName}
+            </span>
+          )}
+        </span>
         <span className="shrink-0 text-sm text-ink-soft tabular-nums dark:text-mist-soft">
           {task.spentInRange} in range · {task.spentTotal}/{task.estimated} total
         </span>
@@ -243,5 +260,65 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
       <p className="mt-1 text-2xl font-semibold md:text-3xl">{value}</p>
       {hint && <p className="mt-1 text-xs text-ink-soft dark:text-mist-soft">{hint}</p>}
     </Card>
+  );
+}
+
+/** A category's identity color, stepped for light and dark surfaces; hollow for "Uncategorized". */
+function Swatch({ color, className = "" }: { color: CategoryColor | null; className?: string }) {
+  if (!color) {
+    return <span aria-hidden="true" className={`inline-block shrink-0 rounded-full border-[1.5px] border-ink-soft/60 dark:border-mist-soft/60 ${className}`} />;
+  }
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-block shrink-0 rounded-full bg-[var(--c)] dark:bg-[var(--c-dark)] ${className}`}
+      style={{ "--c": CATEGORY_HEX[color].light, "--c-dark": CATEGORY_HEX[color].dark } as CSSProperties}
+    />
+  );
+}
+
+/**
+ * One bar per category, largest first. Every row carries its name and values
+ * as text, so identity never depends on color alone.
+ */
+function CategoryBreakdown({ categories }: { categories: Report["categories"] }) {
+  if (categories.length === 0) {
+    return (
+      <p className="py-6 text-center text-sm text-ink-soft dark:text-mist-soft">
+        No focus time in this range yet. Give your tasks a category to see the split here.
+      </p>
+    );
+  }
+  const total = categories.reduce((sum, c) => sum + c.focusSeconds, 0);
+  const max = Math.max(...categories.map((c) => c.focusSeconds));
+
+  return (
+    <ul className="flex flex-col gap-3">
+      {categories.map((c) => {
+        const share = total > 0 ? Math.round((c.focusSeconds / total) * 100) : 0;
+        const style = c.color
+          ? ({ "--c": CATEGORY_HEX[c.color].light, "--c-dark": CATEGORY_HEX[c.color].dark } as CSSProperties)
+          : undefined;
+        return (
+          <li key={c.categoryId ?? "none"} className="flex flex-col gap-1.5">
+            <div className="flex items-baseline justify-between gap-3 text-sm">
+              <span className="flex min-w-0 items-center gap-2 font-medium">
+                <Swatch color={c.color} className="size-2.5" />
+                <span className="truncate">{c.name}</span>
+              </span>
+              <span className="shrink-0 text-ink-soft tabular-nums dark:text-mist-soft">
+                {formatDuration(c.focusSeconds)} · {c.pomodoros} pomodoro{c.pomodoros === 1 ? "" : "s"} · {share}%
+              </span>
+            </div>
+            <div className="h-2 rounded-full bg-ink/[0.06] dark:bg-mist/10" aria-hidden="true">
+              <div
+                className={`h-full rounded-full ${c.color ? "bg-[var(--c)] dark:bg-[var(--c-dark)]" : "bg-ink/30 dark:bg-mist/30"}`}
+                style={{ ...style, width: `${Math.max(2, (c.focusSeconds / max) * 100)}%` }}
+              />
+            </div>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
