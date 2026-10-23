@@ -50,10 +50,13 @@ wake lock while running.
 
 ## Tasks & report
 
-Add tasks with a pomodoro estimate and pick one before focusing. Use the pencil button to edit a task's title or
+Add tasks with a pomodoro estimate and pick one before focusing. Give each task a **category**
+(starts with Personal, Work, Assignments and Development; tap **Edit** next to the filter chips to add,
+rename, recolor or delete up to 8). Filter the list by category; adding a task while a filter is on
+files it under that category. Use the pencil button to edit a task's title or
 estimate (Enter saves, Escape cancels). Drag the grip handle to reorder your to-do list; it works with mouse, touch, or keyboard (focus the handle, press Space, use the arrow keys, then Space). The **report** (chart icon) shows
 focus time, pomodoros, days on goal, focus completion rate, tasks completed, per-day and per-hour
-charts, estimate vs. actual per task, a session log, and **CSV export**.
+charts, focus time by category, estimate vs. actual per task, a session log, and **CSV export**.
 
 ## Your data
 

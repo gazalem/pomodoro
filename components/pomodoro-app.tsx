@@ -8,7 +8,8 @@ import type { AppDatabase } from "@/lib/db/browser";
 import { formatDuration, formatTimeOfDay } from "@/lib/format";
 import { INITIAL_TIMER, localDate, timerReducer, type Phase, type TimerState } from "@/lib/schedule";
 import { readStored, useStoredString, writeStored } from "@/lib/storage";
-import type { Settings, Task, TodayStats } from "@/lib/types";
+import type { Category, Settings, Task, TodayStats } from "@/lib/types";
+import { useCategories } from "@/lib/use-categories";
 import { useTasks } from "@/lib/use-tasks";
 import {
   ListIcon,
@@ -36,9 +37,10 @@ interface PomodoroAppProps {
   db: AppDatabase;
   initialSettings: Settings;
   initialTasks: Task[];
+  initialCategories: Category[];
 }
 
-export function PomodoroApp({ db, initialSettings, initialTasks }: PomodoroAppProps) {
+export function PomodoroApp({ db, initialSettings, initialTasks, initialCategories }: PomodoroAppProps) {
   const { repo } = db;
   const [settings, setSettings] = useState(initialSettings);
   const [timer, dispatch] = useReducer(timerReducer, INITIAL_TIMER);
@@ -48,6 +50,7 @@ export function PomodoroApp({ db, initialSettings, initialTasks }: PomodoroAppPr
   const [today, setToday] = useState<TodayStats | null>(null);
   const [retry, setRetry] = useState(0);
   const tasks = useTasks(repo, initialTasks);
+  const categories = useCategories(repo, initialCategories);
 
   // Reducer actions need the latest settings without re-subscribing timers.
   const settingsRef = useRef(settings);
@@ -194,6 +197,14 @@ export function PomodoroApp({ db, initialSettings, initialTasks }: PomodoroAppPr
       onSelect={selectTask}
       onReorder={(ids) => void tasks.reorder(ids)}
       onEdit={(t, changes) => void tasks.update(t.id, changes)}
+      categories={categories.categories}
+      onAddCategory={categories.add}
+      onUpdateCategory={categories.update}
+      onDeleteCategory={async (id) => {
+        const error = await categories.remove(id);
+        await tasks.refresh(); // its tasks are now uncategorized
+        return error;
+      }}
     />
   );
 

@@ -21,20 +21,42 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
-import type { Task } from "@/lib/types";
+import type { CategoryColor } from "@/lib/categories";
+import { useStoredString } from "@/lib/storage";
+import type { Category, Task } from "@/lib/types";
+import { CategoryDot, CategoryFilter, CategoryManager, CategorySelect, type CategoryFilterValue } from "./categories";
 import { CheckIcon, GripIcon, MinusIcon, PencilIcon, PlusIcon, TomatoIcon, TrashIcon } from "./icons";
+
+const FILTER_KEY = "pomodoro.taskFilter.v1";
+
+type TaskChanges = { title: string; estimatedPomodoros: number; categoryId: number | null };
+
+/**
+ * Puts the reordered visible tasks back into the full open-task order: each
+ * visible task's slot is filled, in turn, by the visible tasks' new order,
+ * so tasks hidden by the filter keep their positions.
+ */
+function mergeOrder(allIds: number[], visibleNewOrder: number[]): number[] {
+  const visible = new Set(visibleNewOrder);
+  let next = 0;
+  return allIds.map((id) => (visible.has(id) ? visibleNewOrder[next++] : id));
+}
 
 interface TaskPanelProps {
   tasks: Task[];
   activeTaskId: number | null;
   error: string | null;
-  onAdd: (title: string, estimate: number) => Promise<Task | null>;
+  onAdd: (title: string, estimate: number, categoryId: number | null) => Promise<Task | null>;
   onToggle: (task: Task) => void;
   onRemove: (task: Task) => void;
   onSelect: (taskId: number | null) => void;
   /** New order of the open tasks, first to last. */
   onReorder: (ids: number[]) => void;
-  onEdit: (task: Task, changes: { title: string; estimatedPomodoros: number }) => void;
+  onEdit: (task: Task, changes: TaskChanges) => void;
+  categories: Category[];
+  onAddCategory: (name: string) => Promise<string | null>;
+  onUpdateCategory: (id: number, patch: { name?: string; color?: CategoryColor }) => Promise<string | null>;
+  onDeleteCategory: (id: number) => Promise<string | null>;
 }
 
 export function TaskPanel({
@@ -47,15 +69,46 @@ export function TaskPanel({
   onSelect,
   onReorder,
   onEdit,
+  categories,
+  onAddCategory,
+  onUpdateCategory,
+  onDeleteCategory,
 }: TaskPanelProps) {
   const [title, setTitle] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [managing, setManaging] = useState(false);
+  // undefined = follow the active filter (adding while viewing "Work" files the task under Work).
+  const [newCategory, setNewCategory] = useState<number | null | undefined>(undefined);
+
+  // The filter is remembered per device and shared by both copies of the panel.
+  const [storedFilter, setStoredFilter] = useStoredString(FILTER_KEY);
+  const categoryIds = new Set(categories.map((c) => c.id));
+  const categoryOf = (t: Task) => (t.categoryId !== null && categoryIds.has(t.categoryId) ? t.categoryId : null);
+  const filter: CategoryFilterValue =
+    storedFilter === "none" ? "none" : categoryIds.has(Number(storedFilter)) ? Number(storedFilter) : "all";
+  const matches = (t: Task) => filter === "all" || (filter === "none" ? categoryOf(t) === null : categoryOf(t) === filter);
+  const filterName = typeof filter === "number" ? categories.find((c) => c.id === filter)?.name : null;
+  const addCategoryId =
+    newCategory !== undefined && (newCategory === null || categoryIds.has(newCategory))
+      ? newCategory
+      : typeof filter === "number"
+        ? filter
+        : null;
   const [estimate, setEstimate] = useState(1);
   const [saving, setSaving] = useState(false);
   const id = useId(); // the panel renders twice (sidebar + sheet), so ids must be unique
 
-  const open = tasks.filter((t) => !t.done);
-  const done = tasks.filter((t) => t.done);
+  const allOpen = tasks.filter((t) => !t.done);
+  const open = allOpen.filter(matches);
+  const done = tasks.filter((t) => t.done && matches(t));
+  const counts = {
+    total: allOpen.length,
+    none: allOpen.filter((t) => categoryOf(t) === null).length,
+    byId: allOpen.reduce((m, t) => {
+      const c = categoryOf(t);
+      return c === null ? m : m.set(c, (m.get(c) ?? 0) + 1);
+    }, new Map<number, number>()),
+  };
   const plannedLeft = open.reduce((sum, t) => sum + Math.max(0, t.estimatedPomodoros - t.spentPomodoros), 0);
 
   async function submit(e: FormEvent) {
@@ -63,11 +116,12 @@ export function TaskPanel({
     const value = title.trim();
     if (!value || saving) return;
     setSaving(true);
-    const task = await onAdd(value, estimate);
+    const task = await onAdd(value, estimate, addCategoryId);
     setSaving(false);
     if (task) {
       setTitle("");
       setEstimate(1);
+      setNewCategory(undefined);
       if (activeTaskId === null) onSelect(task.id);
     }
   }
@@ -79,10 +133,15 @@ export function TaskPanel({
     onCancelEdit: () => setEditingId(null),
     onSaveEdit: (changes) => {
       setEditingId(null);
-      if (changes.title !== task.title || changes.estimatedPomodoros !== task.estimatedPomodoros) {
+      if (
+        changes.title !== task.title ||
+        changes.estimatedPomodoros !== task.estimatedPomodoros ||
+        changes.categoryId !== categoryOf(task)
+      ) {
         onEdit(task, changes);
       }
     },
+    categories,
   });
 
   return (
@@ -100,17 +159,40 @@ export function TaskPanel({
           autoComplete="off"
           className="w-full rounded-xl border border-ink/10 bg-white px-3 py-2.5 text-base text-ink placeholder:text-ink-soft/70 focus:border-tomato focus:outline-none"
         />
-        <div className="flex items-center justify-between gap-2">
-          <EstimateStepper value={estimate} onChange={setEstimate} label="Estimate" />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+            <EstimateStepper value={estimate} onChange={setEstimate} label="Estimate" />
+            <CategorySelect categories={categories} value={addCategoryId} onChange={setNewCategory} />
+          </div>
           <button
             type="submit"
             disabled={!title.trim() || saving}
-            className="rounded-full bg-tomato px-4 py-2 text-sm font-semibold text-white hover:bg-tomato-deep disabled:opacity-40"
+            className="ml-auto rounded-full bg-tomato px-4 py-2 text-sm font-semibold whitespace-nowrap text-white hover:bg-tomato-deep disabled:opacity-40"
           >
             Add task
           </button>
         </div>
       </form>
+
+      <CategoryFilter
+        categories={categories}
+        value={filter}
+        counts={counts}
+        onChange={(value) => setStoredFilter(String(value))}
+        managing={managing}
+        onToggleManage={() => setManaging((m) => !m)}
+      />
+      {managing && (
+        <CategoryManager
+          categories={categories}
+          onAdd={onAddCategory}
+          onUpdate={onUpdateCategory}
+          onDelete={async (categoryId) => {
+            if (filter === categoryId) setStoredFilter("all");
+            return onDeleteCategory(categoryId);
+          }}
+        />
+      )}
 
       {error && (
         <p role="alert" className="rounded-xl bg-tomato/10 px-3 py-2 text-sm text-tomato-deep">
@@ -127,12 +209,14 @@ export function TaskPanel({
         </div>
         {open.length === 0 ? (
           <p className="rounded-xl border border-dashed border-ink/15 px-3 py-6 text-center text-sm text-ink-soft">
-            Add a task, then pick it so your focus time is tracked against it.
+            {filter === "all"
+              ? "Add a task, then pick it so your focus time is tracked against it."
+              : `No open tasks in ${filterName ?? "Uncategorized"}.`}
           </p>
         ) : (
           <SortableTaskList
             tasks={open}
-            onReorder={onReorder}
+            onReorder={(visibleOrder) => onReorder(mergeOrder(allOpen.map((t) => t.id), visibleOrder))}
             rowProps={(task) => ({
               active: task.id === activeTaskId,
               onToggle: () => {
@@ -292,7 +376,8 @@ interface EditProps {
   editing: boolean;
   onStartEdit: () => void;
   onCancelEdit: () => void;
-  onSaveEdit: (changes: { title: string; estimatedPomodoros: number }) => void;
+  onSaveEdit: (changes: TaskChanges) => void;
+  categories: Category[];
 }
 
 interface TaskRowProps extends EditProps {
@@ -318,8 +403,10 @@ function TaskRow({
   onStartEdit,
   onCancelEdit,
   onSaveEdit,
+  categories,
 }: TaskRowProps) {
   const over = task.spentPomodoros > task.estimatedPomodoros;
+  const category = categories.find((c) => c.id === task.categoryId) ?? null;
 
   // Return keyboard focus to the pencil button when the editor closes.
   const editButton = useRef<HTMLButtonElement>(null);
@@ -336,7 +423,7 @@ function TaskRow({
         style={drag?.style}
         className="rounded-2xl border border-tomato bg-white p-3 shadow-[0_0_0_1px_var(--color-tomato)]"
       >
-        <TaskEditor task={task} onSave={onSaveEdit} onCancel={onCancelEdit} />
+        <TaskEditor task={task} category={category} categories={categories} onSave={onSaveEdit} onCancel={onCancelEdit} />
       </li>
     );
   }
@@ -373,8 +460,17 @@ function TaskRow({
         <span className={`block truncate text-[0.95rem] ${task.done ? "text-ink-soft line-through" : "text-ink"}`}>
           {task.title}
         </span>
-        <span className={`text-xs tabular-nums ${over ? "text-tomato-deep" : "text-ink-soft"}`}>
-          {task.spentPomodoros}/{task.estimatedPomodoros} pomodoros
+        <span className="flex flex-wrap items-center gap-x-1.5 text-xs text-ink-soft">
+          {category && (
+            <>
+              <CategoryDot color={category.color} className="size-2" />
+              <span>{category.name}</span>
+              <span aria-hidden="true">·</span>
+            </>
+          )}
+          <span className={`tabular-nums ${over ? "text-tomato-deep" : ""}`}>
+            {task.spentPomodoros}/{task.estimatedPomodoros} pomodoros
+          </span>
           {active && <span className="ml-2 font-semibold text-tomato">● Focusing</span>}
         </span>
       </button>
@@ -405,15 +501,20 @@ function TaskRow({
 /** Inline editor for a task's title and estimate. Enter saves, Escape cancels. */
 function TaskEditor({
   task,
+  category,
+  categories,
   onSave,
   onCancel,
 }: {
   task: Task;
-  onSave: (changes: { title: string; estimatedPomodoros: number }) => void;
+  category: Category | null;
+  categories: Category[];
+  onSave: (changes: TaskChanges) => void;
   onCancel: () => void;
 }) {
   const [title, setTitle] = useState(task.title);
   const [estimate, setEstimate] = useState(task.estimatedPomodoros);
+  const [categoryId, setCategoryId] = useState<number | null>(category?.id ?? null);
   const input = useRef<HTMLInputElement>(null);
   const id = useId();
   const trimmed = title.trim();
@@ -425,7 +526,7 @@ function TaskEditor({
 
   function submit(e: FormEvent) {
     e.preventDefault();
-    if (trimmed) onSave({ title: trimmed, estimatedPomodoros: estimate });
+    if (trimmed) onSave({ title: trimmed, estimatedPomodoros: estimate, categoryId });
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -453,6 +554,7 @@ function TaskEditor({
       />
       <div className="flex flex-wrap items-center justify-between gap-2">
         <EstimateStepper value={estimate} onChange={setEstimate} label="Estimate" />
+        <CategorySelect categories={categories} value={categoryId} onChange={setCategoryId} />
         <div className="ml-auto flex gap-1.5">
           <button
             type="button"

@@ -42,6 +42,24 @@ const MIGRATIONS = [
     "ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
     "UPDATE tasks SET sort_order = id",
   ],
+  // 3: categories (personal, work, college, ...) for tasks, with starter set.
+  [
+    `CREATE TABLE categories (
+       id         INTEGER PRIMARY KEY AUTOINCREMENT,
+       name       TEXT    NOT NULL,
+       color      TEXT    NOT NULL,
+       sort_order INTEGER NOT NULL DEFAULT 0,
+       created_at INTEGER NOT NULL
+     )`,
+    "CREATE UNIQUE INDEX categories_name ON categories (name COLLATE NOCASE)",
+    "ALTER TABLE tasks ADD COLUMN category_id INTEGER REFERENCES categories (id) ON DELETE SET NULL",
+    "CREATE INDEX tasks_category_id ON tasks (category_id)",
+    `INSERT INTO categories (name, color, sort_order, created_at) VALUES
+       ('Personal', 'blue', 1, CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+       ('Work', 'orange', 2, CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+       ('Assignments', 'aqua', 3, CAST(strftime('%s', 'now') AS INTEGER) * 1000),
+       ('Development', 'yellow', 4, CAST(strftime('%s', 'now') AS INTEGER) * 1000)`,
+  ],
 ];
 
 export async function migrate(db: SqlDriver): Promise<void> {
