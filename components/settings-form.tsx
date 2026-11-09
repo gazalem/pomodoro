@@ -146,7 +146,7 @@ export function SettingsForm({ db, settings, onSave, onCancel }: SettingsFormPro
   );
 }
 
-function Group({ title, children }: { title: string; children: ReactNode }) {
+export function Group({ title, children }: { title: string; children: ReactNode }) {
   return (
     <fieldset>
       <legend className="mb-1 text-sm font-semibold tracking-wide text-ink-soft uppercase">{title}</legend>
@@ -206,7 +206,7 @@ interface ToggleProps {
   onChange: (checked: boolean) => void;
 }
 
-function Toggle({ label, hint, checked, onChange }: ToggleProps) {
+export function Toggle({ label, hint, checked, onChange }: ToggleProps) {
   return (
     <label className="flex cursor-pointer items-center justify-between gap-4 py-2.5">
       <span>

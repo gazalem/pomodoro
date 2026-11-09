@@ -8,9 +8,10 @@ import type { AppDatabase } from "@/lib/db/browser";
 import { formatDuration, formatTimeOfDay } from "@/lib/format";
 import { INITIAL_TIMER, localDate, timerReducer, type Phase, type TimerState } from "@/lib/schedule";
 import { readStored, useStoredString, writeStored } from "@/lib/storage";
-import type { Category, Settings, Task, TodayStats } from "@/lib/types";
+import type { Category, PhaseType, Settings, Task, TodayStats } from "@/lib/types";
 import { useCategories } from "@/lib/use-categories";
 import { useTasks } from "@/lib/use-tasks";
+import { useWakeLock } from "@/lib/use-wake-lock";
 import {
   ListIcon,
   PauseIcon,
@@ -22,6 +23,7 @@ import {
   StopIcon,
   TomatoIcon,
 } from "./icons";
+import { ModeNav } from "./mode-nav";
 import { SettingsForm } from "./settings-form";
 import { Sheet } from "./sheet";
 import { SoundTiles } from "./sound-tiles";
@@ -29,6 +31,13 @@ import { TaskPanel } from "./task-panel";
 import { TimerRing } from "./timer-ring";
 
 const TIMER_KEY = "pomodoro.timer.v1";
+
+const PHASE_LABEL: Record<PhaseType, string> = {
+  focus: "Focus",
+  short_break: "Short break",
+  long_break: "Long break",
+  lunch: "Lunch",
+};
 const SOUND_KEY = "pomodoro.sound.v1";
 const RETRY_MS = 15_000;
 const SOUND_KINDS: SoundKind[] = ["ocean", "fire", "rain", "nature"];
@@ -140,28 +149,7 @@ export function PomodoroApp({ db, initialSettings, initialTasks, initialCategori
   }, [sound, audible]);
 
   // Keep phones from sleeping while the timer runs.
-  useEffect(() => {
-    if (!running || !settings.keepScreenAwake || !("wakeLock" in navigator)) return;
-    let lock: WakeLockSentinel | null = null;
-    let cancelled = false;
-    const acquire = async () => {
-      if (document.visibilityState !== "visible") return;
-      try {
-        const next = await navigator.wakeLock.request("screen");
-        if (cancelled) void next.release();
-        else lock = next;
-      } catch {
-        // Denied (battery saver, unsupported context): not critical.
-      }
-    };
-    void acquire();
-    document.addEventListener("visibilitychange", acquire);
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", acquire);
-      void lock?.release();
-    };
-  }, [running, settings.keepScreenAwake]);
+  useWakeLock(running && settings.keepScreenAwake);
 
   const act = (type: "start" | "pause" | "resume" | "restart" | "skip" | "stop") => {
     ambient.unlock(); // user gesture: allowed to start audio now
@@ -219,17 +207,7 @@ export function PomodoroApp({ db, initialSettings, initialTasks, initialCategori
           <StatsIcon className="text-[1.6rem]" />
         </Link>
 
-        <p className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-sm text-white/90 tabular-nums" aria-live="polite">
-          <TomatoIcon className="text-base" />
-          {today ? (
-            <>
-              {today.pomodoros}/{settings.dailyGoal}
-              <span className="text-white/60">· {formatDuration(today.focusSeconds)}</span>
-            </>
-          ) : (
-            <span className="text-white/60">Today</span>
-          )}
-        </p>
+        <ModeNav current="focus" />
 
         <div className="flex items-center gap-1">
           <button
@@ -259,7 +237,22 @@ export function PomodoroApp({ db, initialSettings, initialTasks, initialCategori
             timer === INITIAL_TIMER ? "opacity-0" : "opacity-100"
           }`}
         >
-          <TimerRing phase={timer.phase} idleMs={settings.focusMinutes * 60_000} />
+            <p className="-mb-2 flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-sm text-white/90 tabular-nums" aria-live="polite">
+              <TomatoIcon className="text-base" />
+              {today ? (
+                <>
+                  {today.pomodoros}/{settings.dailyGoal}
+                  <span className="text-white/60">· {formatDuration(today.focusSeconds)}</span>
+                </>
+              ) : (
+                <span className="text-white/60">Today</span>
+              )}
+            </p>
+          <TimerRing
+            phase={timer.phase}
+            idleMs={settings.focusMinutes * 60_000}
+            label={timer.phase ? PHASE_LABEL[timer.phase.type] : "Ready"}
+          />
 
           <CycleDots done={timer.cycleCount} total={settings.longBreakInterval} />
 

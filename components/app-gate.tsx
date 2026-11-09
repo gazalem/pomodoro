@@ -1,36 +1,74 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { useDatabase, type DatabaseState } from "@/lib/db/browser";
+import { useDatabase, type AppDatabase, type DatabaseState } from "@/lib/db/browser";
+import type { Repo } from "@/lib/repo";
 import type { Category, Settings, Task } from "@/lib/types";
 import { PomodoroApp } from "./pomodoro-app";
 
-interface Loaded {
+interface FocusData {
   settings: Settings;
   tasks: Task[];
   categories: Category[];
 }
 
-/** Opens the in-browser database, loads the initial data, then shows the app. */
+async function loadFocusData(repo: Repo): Promise<FocusData> {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const [settings, tasks, categories] = await Promise.all([
+    repo.getSettings(),
+    repo.listTasks(startOfDay.getTime()),
+    repo.listCategories(),
+  ]);
+  return { settings, tasks, categories };
+}
+
+/** The focus (pomodoro) page. */
 export function AppGate() {
+  return (
+    <DatabaseGate load={loadFocusData}>
+      {(db, data) => (
+        <PomodoroApp
+          db={db}
+          initialSettings={data.settings}
+          initialTasks={data.tasks}
+          initialCategories={data.categories}
+        />
+      )}
+    </DatabaseGate>
+  );
+}
+
+/**
+ * Opens the in-browser database, runs `load` (pass a stable, module-level
+ * function), then renders `children` with the result. Shows the loading,
+ * "open in another tab" and error states meanwhile.
+ */
+export function DatabaseGate<T>({
+  load,
+  children,
+  shellRingClassName,
+}: {
+  load: (repo: Repo) => Promise<T>;
+  children: (db: AppDatabase, data: T) => ReactNode;
+  /** Color of the loading placeholder ring, to match the page. */
+  shellRingClassName?: string;
+}) {
   const state = useDatabase();
-  const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const [loaded, setLoaded] = useState<{ data: T } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     if (state.status !== "ready") return;
     let active = true;
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    const { repo } = state.db;
-    Promise.all([repo.getSettings(), repo.listTasks(startOfDay.getTime()), repo.listCategories()]).then(
-      ([settings, tasks, categories]) => active && setLoaded({ settings, tasks, categories }),
+    load(state.db.repo).then(
+      (data) => active && setLoaded({ data }),
       (error: unknown) => active && setLoadError(error instanceof Error ? error.message : String(error)),
     );
     return () => {
       active = false;
     };
-  }, [state]);
+  }, [state, load]);
 
   if (state.status === "error" || loadError) {
     return <ErrorScreen state={state} message={loadError} />;
@@ -42,23 +80,16 @@ export function AppGate() {
       </CenteredMessage>
     );
   }
-  if (state.status !== "ready" || !loaded) return <AppShell />;
+  if (state.status !== "ready" || !loaded) return <AppShell ringClassName={shellRingClassName} />;
 
-  return (
-    <PomodoroApp
-      db={state.db}
-      initialSettings={loaded.settings}
-      initialTasks={loaded.tasks}
-      initialCategories={loaded.categories}
-    />
-  );
+  return <>{children(state.db, loaded.data)}</>;
 }
 
 /** Placeholder with the same silhouette as the timer, shown while the database opens. */
-export function AppShell() {
+export function AppShell({ ringClassName = "border-salmon" }: { ringClassName?: string }) {
   return (
     <div className="flex min-h-dvh items-center justify-center" aria-busy="true" aria-label="Loading">
-      <div className="aspect-square w-[min(84vw,46dvh,440px)] rounded-full border-[6px] border-salmon motion-safe:animate-pulse" />
+      <div className={`aspect-square w-[min(84vw,46dvh,440px)] rounded-full border-[6px] ${ringClassName} motion-safe:animate-pulse`} />
     </div>
   );
 }

@@ -9,11 +9,11 @@ import { ColumnChart, type Column } from "./column-chart";
 import { DownloadIcon } from "./icons";
 import { RangePicker } from "./range-picker";
 
-const WEEKDAY = new Intl.DateTimeFormat("en", { weekday: "short", timeZone: "UTC" });
-const SHORT_DATE = new Intl.DateTimeFormat("en", { month: "short", day: "numeric", timeZone: "UTC" });
-const LONG_DATE = new Intl.DateTimeFormat("en", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" });
+export const WEEKDAY = new Intl.DateTimeFormat("en", { weekday: "short", timeZone: "UTC" });
+export const SHORT_DATE = new Intl.DateTimeFormat("en", { month: "short", day: "numeric", timeZone: "UTC" });
+export const LONG_DATE = new Intl.DateTimeFormat("en", { weekday: "long", month: "short", day: "numeric", timeZone: "UTC" });
 
-const asUtc = (iso: string) => new Date(`${iso}T00:00:00Z`);
+export const asUtc = (iso: string) => new Date(`${iso}T00:00:00Z`);
 
 function hourLabel(hour: number) {
   const suffix = hour < 12 ? "am" : "pm";
@@ -245,7 +245,7 @@ function TaskLine({ task }: { task: Report["tasks"][number] }) {
   );
 }
 
-function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
+export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
   return (
     <div className={`rounded-3xl border border-ink/10 bg-white p-4 md:p-5 dark:border-mist/10 dark:bg-night-raised ${className}`}>
       {children}
@@ -253,7 +253,7 @@ function Card({ children, className = "" }: { children: ReactNode; className?: s
   );
 }
 
-function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+export function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <Card>
       <p className="text-sm text-ink-soft dark:text-mist-soft">{label}</p>

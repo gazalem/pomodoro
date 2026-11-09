@@ -8,8 +8,9 @@ export function formatClock(ms: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${String(m).padStart(2, "0")}:${ss}`;
 }
 
-/** 5400 → "1h 30m", 900 → "15m", 0 → "0m". */
+/** 5400 → "1h 30m", 900 → "15m", 40 → "40s", 0 → "0m". */
 export function formatDuration(seconds: number): string {
+  if (seconds > 0 && seconds < 60) return `${Math.round(seconds)}s`;
   const minutes = Math.round(seconds / 60);
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;

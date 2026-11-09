@@ -19,6 +19,8 @@ export const DEFAULT_SETTINGS: Settings = {
   chime: true,
   notifications: false,
   keepScreenAwake: true,
+  exerciseSeconds: 45,
+  restSeconds: 15,
 };
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -65,5 +67,7 @@ export function normalizeSettings(input: unknown): Settings {
     chime: bool(raw.chime, d.chime),
     notifications: bool(raw.notifications, d.notifications),
     keepScreenAwake: bool(raw.keepScreenAwake, d.keepScreenAwake),
+    exerciseSeconds: int(raw.exerciseSeconds, d.exerciseSeconds, 5, 3600),
+    restSeconds: int(raw.restSeconds, d.restSeconds, 0, 1800),
   };
 }

@@ -7,9 +7,9 @@
  *   cache first; they never change.
  * - Everything else same-origin: stale-while-revalidate.
  */
-const CACHE = "pomodoro-v1";
+const CACHE = "pomodoro-v2";
 const BASE = new URL(self.registration.scope).pathname; // e.g. "/" or "/pomodoro/"
-const SHELL = [BASE, `${BASE}report/`, `${BASE}manifest.webmanifest`, `${BASE}icon.svg`];
+const SHELL = [BASE, `${BASE}exercise/`, `${BASE}report/`, `${BASE}manifest.webmanifest`, `${BASE}icon.svg`];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

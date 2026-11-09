@@ -218,3 +218,69 @@ describe("categories", () => {
     assert.equal(r.tasks.find((t) => t.title === "Ticket")?.categoryName, "Work");
   });
 });
+
+describe("exercises", () => {
+  it("creates reps and time exercises with sensible defaults", async () => {
+    const pushups = (await repo.createExercise({ title: "Push-ups", sets: 3, mode: "reps", reps: 15 }))!;
+    assert.deepEqual([pushups.mode, pushups.sets, pushups.reps, pushups.durationSeconds], ["reps", 3, 15, null]);
+    const plank = (await repo.createExercise({ title: "Plank", mode: "time" }))!;
+    assert.deepEqual([plank.sets, plank.reps, plank.durationSeconds], [3, null, null]);
+    assert.equal(await repo.createExercise({ title: "Bad", mode: "jog" }), null);
+    assert.equal(await repo.createExercise({ title: " ", mode: "reps" }), null);
+  });
+
+  it("switching mode clears the other mode's value", async () => {
+    const e = (await repo.createExercise({ title: "Burpees", mode: "reps", reps: 12 }))!;
+    const timed = (await repo.updateExercise(e.id, { mode: "time", durationSeconds: 40 }))!;
+    assert.deepEqual([timed.mode, timed.reps, timed.durationSeconds], ["time", null, 40]);
+    const back = (await repo.updateExercise(e.id, { mode: "reps" }))!;
+    assert.deepEqual([back.mode, back.reps, back.durationSeconds], ["reps", 10, null]);
+    assert.equal(await repo.updateExercise(e.id, { sets: 0 }), null);
+  });
+
+  it("orders, completes and resets exercises", async () => {
+    const a = (await repo.createExercise({ title: "A", mode: "reps" }))!;
+    const b = (await repo.createExercise({ title: "B", mode: "reps" }))!;
+    await repo.reorderExercises([b.id, a.id]);
+    await repo.updateExercise(b.id, { done: true });
+    assert.deepEqual((await repo.listExercises()).map((e) => [e.title, e.done]), [["A", false], ["B", true]]);
+    assert.equal(await repo.resetExercises(), 1);
+    assert.deepEqual((await repo.listExercises()).map((e) => e.title), ["B", "A"]);
+  });
+
+  it("logs sets idempotently and reports workout totals", async () => {
+    const e = (await repo.createExercise({ title: "Push-ups", sets: 2, mode: "reps", reps: 15 }))!;
+    const base = {
+      kind: "set" as const,
+      status: "completed" as const,
+      exerciseId: e.id,
+      exerciseTitle: "Push-ups",
+      reps: 15,
+      plannedSeconds: null,
+      completesExercise: false,
+      startedAt: 1,
+      endedAt: 31,
+      localDate: "2026-11-09",
+      localHour: 9,
+    };
+    const logs = [
+      { ...base, clientId: "s1", setNumber: 1, actualSeconds: 30 },
+      { ...base, clientId: "r1", kind: "rest" as const, setNumber: null, reps: null, plannedSeconds: 15, actualSeconds: 15 },
+      { ...base, clientId: "s2", setNumber: 2, actualSeconds: 25, completesExercise: true },
+      { ...base, clientId: "bad", kind: "nap" },
+    ];
+    assert.equal((await repo.insertExerciseLogs(logs)).length, 3);
+    await repo.insertExerciseLogs(logs); // retry is harmless
+
+    const r = await repo.getExerciseReport("2026-11-08", "2026-11-09");
+    assert.deepEqual(r.totals, { activeSeconds: 55, restSeconds: 15, sets: 2, reps: 30, exercisesCompleted: 1, activeDays: 1 });
+    assert.deepEqual(r.days.map((d) => [d.date, d.sets]), [["2026-11-08", 0], ["2026-11-09", 2]]);
+    // node:sqlite rows have a null prototype; compare their values.
+    assert.deepEqual(r.exercises.map((x) => ({ ...x })), [{ title: "Push-ups", sets: 2, reps: 30, activeSeconds: 55 }]);
+    assert.deepEqual({ ...(await repo.getExerciseDayStats("2026-11-09")) }, { sets: 2, activeSeconds: 55 });
+
+    // Deleting the exercise keeps its history under the saved title.
+    await repo.deleteExercise(e.id);
+    assert.equal((await repo.getExerciseReport("2026-11-09", "2026-11-09")).exercises[0].title, "Push-ups");
+  });
+});
