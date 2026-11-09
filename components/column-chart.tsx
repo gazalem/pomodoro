@@ -15,6 +15,8 @@ export interface Column {
 
 interface ColumnChartProps {
   columns: Column[];
+  /** Bar fill (light and dark mode); defaults to the focus tomato. */
+  barClassName?: string;
   /** Optional reference line, e.g. the daily goal. */
   reference?: { value: number; label: string };
   ariaLabel: string;
@@ -32,7 +34,7 @@ function niceMax(value: number): number {
  * Single-series column chart in plain HTML/CSS: one hue, thin columns with a
  * rounded data end, hairline grid, hover/focus tooltip per column.
  */
-export function ColumnChart({ columns, reference, ariaLabel }: ColumnChartProps) {
+export function ColumnChart({ columns, reference, ariaLabel, barClassName = "bg-tomato-deep dark:bg-tomato" }: ColumnChartProps) {
   const [hover, setHover] = useState<number | null>(null);
   const max = niceMax(Math.max(reference?.value ?? 0, ...columns.map((c) => c.value)));
   const ticks = [0, max / 2, max].filter(Number.isInteger); // values are counts
@@ -79,7 +81,7 @@ export function ColumnChart({ columns, reference, ariaLabel }: ColumnChartProps)
                 }`}
               >
                 <span
-                  className="block w-[min(24px,70%)] rounded-t-[4px] bg-tomato-deep dark:bg-tomato"
+                  className={`block w-[min(24px,70%)] rounded-t-[4px] ${barClassName}`}
                   style={{ height: c.value > 0 ? `max(2px, ${(c.value / max) * 100}%)` : 0 }}
                 />
               </button>

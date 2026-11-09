@@ -30,6 +30,10 @@ export interface Settings {
   chime: boolean;
   notifications: boolean;
   keepScreenAwake: boolean;
+  /** Exercise mode: default length of a timed set, in seconds. */
+  exerciseSeconds: number;
+  /** Exercise mode: rest between sets, in seconds (0 = no rest). */
+  restSeconds: number;
 }
 
 export interface Task {
@@ -69,4 +73,42 @@ export interface Category {
   id: number;
   name: string;
   color: CategoryColor;
+}
+
+/** "reps": do N repetitions, tap Done. "time": the set runs for a fixed time. */
+export type ExerciseMode = "reps" | "time";
+
+export interface Exercise {
+  id: number;
+  title: string;
+  sets: number;
+  mode: ExerciseMode;
+  /** Repetitions per set (reps mode). */
+  reps: number | null;
+  /** Seconds per set (time mode); null = the default from settings. */
+  durationSeconds: number | null;
+  done: boolean;
+  createdAt: number;
+  completedAt: number | null;
+}
+
+/** One finished (or abandoned) exercise set or rest, stored for the report. */
+export interface ExerciseLog {
+  clientId: string;
+  kind: "set" | "rest";
+  status: SessionStatus;
+  exerciseId: number | null;
+  /** Snapshot, so the report keeps the name if the exercise is renamed or deleted. */
+  exerciseTitle: string | null;
+  setNumber: number | null;
+  reps: number | null;
+  /** null for untimed (reps) sets. */
+  plannedSeconds: number | null;
+  actualSeconds: number;
+  /** True on the set that finished the exercise's last set. */
+  completesExercise: boolean;
+  startedAt: number;
+  endedAt: number;
+  localDate: string;
+  localHour: number;
 }

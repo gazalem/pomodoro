@@ -42,6 +42,9 @@ next-env.d.ts
 # copied from node_modules by scripts/copy-sqlite-wasm.mjs
 /public/sqlite-wasm
 
+# Playwright MCP snapshots/screenshots from manual testing
+/.playwright-mcp
+
 ### macOS ###
 # General
 .DS_*

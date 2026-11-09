@@ -58,6 +58,23 @@ estimate (Enter saves, Escape cancels). Drag the grip handle to reorder your to-
 focus time, pomodoros, days on goal, focus completion rate, tasks completed, per-day and per-hour
 charts, focus time by category, estimate vs. actual per task, a session log, and **CSV export**.
 
+## Exercise mode
+
+Switch to **Exercise** at the top of the page for a workout timer with the same kind of list.
+
+- Each exercise has a number of **sets**, measured either in **repetitions** (e.g. Push-ups, 3 × 15)
+  or by **time** (e.g. Plank, 3 × 45s).
+- Press start once and the workout runs through the list in order, set by set:
+  set → rest → set → … → next exercise. **Timed sets end on their own**, like the pomodoro;
+  **repetition sets wait for you to tap Done**, then the rest starts automatically.
+- Exercises are checked off when their last set is done; **Reset all** brings the list back for
+  the next workout. Tap an exercise to start the workout from it.
+- The gear on that page sets the **exercise time** (default length of a timed set) and the
+  **rest time** (0 = no rest). A timed exercise left at the default follows the setting.
+- Beeps count down the last 3 seconds of each set and rest; the screen stays on during a workout.
+- The report's **Exercise** tab shows exercise time, sets, repetitions, exercises finished, sets
+  per day and a per-exercise breakdown.
+
 ## Your data
 
 Data is stored with SQLite's **`opfs-sahpool`** VFS in the browser's Origin Private File System.
@@ -81,8 +98,10 @@ app/
 components/
   app-gate.tsx                Opens the database, then renders the timer
   pomodoro-app.tsx            Timer screen; report-client.tsx / report-view.tsx for the report
+  workout-app.tsx             Exercise page (exercise-panel.tsx for the list)
 lib/
   schedule.ts                 Pure timer engine + reducer (all scheduling rules)
+  workout.ts                  Pure workout engine for exercise mode (sets, rests, auto-advance)
   repo.ts                     Every SQL query, written against an async SqlDriver
   db/worker.ts                Web Worker that owns SQLite WASM (OPFS, or IndexedDB fallback)
   db/client.ts                Promise RPC to the worker (implements SqlDriver)

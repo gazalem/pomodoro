@@ -1,7 +1,18 @@
 import { isCategoryColor, MAX_CATEGORIES, nextFreeColor, type CategoryColor } from "./categories";
 import { first, type SqlDriver, type SqlParam } from "./db/driver";
 import { normalizeSettings } from "./settings";
-import type { Category, PhaseType, SessionLog, SessionStatus, Settings, Task, TodayStats } from "./types";
+import type {
+  Category,
+  Exercise,
+  ExerciseLog,
+  ExerciseMode,
+  PhaseType,
+  SessionLog,
+  SessionStatus,
+  Settings,
+  Task,
+  TodayStats,
+} from "./types";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PHASE_TYPES: readonly PhaseType[] = ["focus", "short_break", "long_break", "lunch"];
@@ -93,6 +104,82 @@ function validLog(value: unknown): SessionLog | null {
 
 // ---------------------------------------------------------------------------
 // Report types
+
+// ---------------------------------------------------------------------------
+// Exercise rows and validation
+
+interface ExerciseRow {
+  id: number;
+  title: string;
+  sets: number;
+  mode: ExerciseMode;
+  reps: number | null;
+  duration_seconds: number | null;
+  done: number;
+  created_at: number;
+  completed_at: number | null;
+}
+
+const EXERCISE_SELECT =
+  "SELECT id, title, sets, mode, reps, duration_seconds, done, created_at, completed_at FROM exercises";
+
+function toExercise(row: ExerciseRow): Exercise {
+  return {
+    id: row.id,
+    title: row.title,
+    sets: row.sets,
+    mode: row.mode,
+    reps: row.reps,
+    durationSeconds: row.duration_seconds,
+    done: row.done === 1,
+    createdAt: row.created_at,
+    completedAt: row.completed_at,
+  };
+}
+
+const intIn = (value: unknown, min: number, max: number): number | null =>
+  typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : null;
+
+export const EXERCISE_LIMITS = { sets: [1, 20], reps: [1, 500], seconds: [5, 3600] } as const;
+
+function validExerciseLog(value: unknown): ExerciseLog | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const isInt = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
+  const intOrNull = (n: unknown) => n === null || isInt(n);
+
+  if (typeof v.clientId !== "string" || v.clientId.length === 0 || v.clientId.length > 64) return null;
+  if (v.kind !== "set" && v.kind !== "rest") return null;
+  if (!STATUSES.includes(v.status as SessionStatus)) return null;
+  if (!intOrNull(v.exerciseId) || !intOrNull(v.setNumber) || !intOrNull(v.reps) || !intOrNull(v.plannedSeconds)) return null;
+  if (v.exerciseTitle !== null && typeof v.exerciseTitle !== "string") return null;
+  if (!isInt(v.actualSeconds) || typeof v.completesExercise !== "boolean") return null;
+  if (!isInt(v.startedAt) || !isInt(v.endedAt) || v.endedAt < v.startedAt) return null;
+  if (!isIsoDate(v.localDate) || !isInt(v.localHour) || v.localHour > 23) return null;
+  return v as unknown as ExerciseLog;
+}
+
+export interface ExerciseDayPoint {
+  date: string;
+  activeSeconds: number;
+  sets: number;
+}
+
+export interface ExerciseReport {
+  from: string;
+  to: string;
+  totals: {
+    /** Time spent in sets (not rests). */
+    activeSeconds: number;
+    restSeconds: number;
+    sets: number;
+    reps: number;
+    exercisesCompleted: number;
+    activeDays: number;
+  };
+  days: ExerciseDayPoint[];
+  exercises: { title: string; sets: number; reps: number; activeSeconds: number }[];
+}
 
 export interface DayPoint {
   date: string;
@@ -259,6 +346,202 @@ export function createRepo(db: SqlDriver) {
 
       if (sets.length > 0) await db.run(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`, [...values, id]);
       return getTask(id);
+    },
+
+    // -- Exercises ----------------------------------------------------------
+
+    /** Open exercises first (in the user's order), then completed ones. */
+    async listExercises(): Promise<Exercise[]> {
+      const rows = await db.all<ExerciseRow>(`${EXERCISE_SELECT} ORDER BY done ASC, sort_order ASC, id ASC`);
+      return rows.map(toExercise);
+    },
+
+    async createExercise(input: {
+      title?: unknown;
+      sets?: unknown;
+      mode?: unknown;
+      reps?: unknown;
+      durationSeconds?: unknown;
+    }): Promise<Exercise | null> {
+      const title = cleanTitle(input.title);
+      if (!title || (input.mode !== "reps" && input.mode !== "time")) return null;
+      const sets = intIn(input.sets, ...EXERCISE_LIMITS.sets) ?? 3;
+      const reps = input.mode === "reps" ? (intIn(input.reps, ...EXERCISE_LIMITS.reps) ?? 10) : null;
+      const duration = input.mode === "time" ? intIn(input.durationSeconds, ...EXERCISE_LIMITS.seconds) : null;
+      const { lastInsertRowid } = await db.run(
+        `INSERT INTO exercises (title, sets, mode, reps, duration_seconds, created_at, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM exercises))`,
+        [title, sets, input.mode, reps, duration, Date.now()],
+      );
+      const row = await first<ExerciseRow>(db, `${EXERCISE_SELECT} WHERE id = ?`, [lastInsertRowid]);
+      return row ? toExercise(row) : null;
+    },
+
+    /**
+     * Partial update. Switching mode clears the other mode's value (reps or
+     * duration). `durationSeconds: null` means "use the default from settings".
+     */
+    async updateExercise(
+      id: number,
+      patch: { title?: unknown; sets?: unknown; mode?: unknown; reps?: unknown; durationSeconds?: unknown; done?: unknown },
+    ): Promise<Exercise | null> {
+      const current = await first<ExerciseRow>(db, `${EXERCISE_SELECT} WHERE id = ?`, [id]);
+      if (!current) return null;
+      const sets: string[] = [];
+      const values: SqlParam[] = [];
+
+      if (patch.title !== undefined) {
+        const title = cleanTitle(patch.title);
+        if (!title) return null;
+        sets.push("title = ?");
+        values.push(title);
+      }
+      if (patch.sets !== undefined) {
+        const n = intIn(patch.sets, ...EXERCISE_LIMITS.sets);
+        if (n === null) return null;
+        sets.push("sets = ?");
+        values.push(n);
+      }
+      const mode = patch.mode ?? current.mode;
+      if (mode !== "reps" && mode !== "time") return null;
+      if (patch.mode !== undefined) {
+        sets.push("mode = ?");
+        values.push(mode);
+      }
+      if (mode === "reps") {
+        if (patch.reps !== undefined || patch.mode !== undefined) {
+          const reps = patch.reps === undefined ? (current.reps ?? 10) : intIn(patch.reps, ...EXERCISE_LIMITS.reps);
+          if (reps === null) return null;
+          sets.push("reps = ?", "duration_seconds = NULL");
+          values.push(reps);
+        }
+      } else if (patch.durationSeconds !== undefined || patch.mode !== undefined) {
+        let duration: number | null;
+        if (patch.durationSeconds === undefined) {
+          duration = current.mode === "time" ? current.duration_seconds : null; // switched to time: use the default
+        } else if (patch.durationSeconds === null) {
+          duration = null;
+        } else {
+          duration = intIn(patch.durationSeconds, ...EXERCISE_LIMITS.seconds);
+          if (duration === null) return null;
+        }
+        sets.push("duration_seconds = ?", "reps = NULL");
+        values.push(duration);
+      }
+      if (typeof patch.done === "boolean") {
+        sets.push("done = ?", "completed_at = ?");
+        values.push(...(patch.done ? [1, Date.now()] : [0, null]));
+      }
+
+      if (sets.length > 0) await db.run(`UPDATE exercises SET ${sets.join(", ")} WHERE id = ?`, [...values, id]);
+      const row = await first<ExerciseRow>(db, `${EXERCISE_SELECT} WHERE id = ?`, [id]);
+      return row ? toExercise(row) : null;
+    },
+
+    async deleteExercise(id: number): Promise<boolean> {
+      return (await db.run("DELETE FROM exercises WHERE id = ?", [id])).changes > 0;
+    },
+
+    async reorderExercises(ids: number[]): Promise<void> {
+      const valid = ids.filter((id) => Number.isInteger(id) && id > 0);
+      await db.batch(
+        valid.map((id, index) => ({ sql: "UPDATE exercises SET sort_order = ? WHERE id = ?", params: [index + 1, id] })),
+      );
+    },
+
+    /** Unchecks every exercise so the list can be done again (e.g. the next workout). */
+    async resetExercises(): Promise<number> {
+      return (await db.run("UPDATE exercises SET done = 0, completed_at = NULL WHERE done = 1")).changes;
+    },
+
+    /** Stores finished sets/rests; idempotent on clientId. Returns the valid clientIds. */
+    async insertExerciseLogs(input: unknown[]): Promise<string[]> {
+      const logs = input.map(validExerciseLog).filter((l): l is ExerciseLog => l !== null);
+      await db.batch(
+        logs.map((log) => ({
+          sql: `INSERT OR IGNORE INTO exercise_logs
+                  (client_id, kind, status, exercise_id, exercise_title, set_number, reps, planned_seconds,
+                   actual_seconds, completes_exercise, started_at, ended_at, local_date, local_hour)
+                VALUES (?, ?, ?, (SELECT id FROM exercises WHERE id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          params: [
+            log.clientId,
+            log.kind,
+            log.status,
+            log.exerciseId,
+            log.exerciseTitle,
+            log.setNumber,
+            log.reps,
+            log.plannedSeconds,
+            log.actualSeconds,
+            log.completesExercise ? 1 : 0,
+            log.startedAt,
+            log.endedAt,
+            log.localDate,
+            log.localHour,
+          ],
+        })),
+      );
+      return logs.map((l) => l.clientId);
+    },
+
+    /** Completed sets and time in sets for one local day (header pill). */
+    async getExerciseDayStats(date: string): Promise<{ sets: number; activeSeconds: number }> {
+      const row = await first<{ sets: number; activeSeconds: number }>(
+        db,
+        `SELECT COALESCE(SUM(status = 'completed'), 0) AS sets, COALESCE(SUM(actual_seconds), 0) AS activeSeconds
+         FROM exercise_logs WHERE kind = 'set' AND local_date = ?`,
+        [date],
+      );
+      return row ?? { sets: 0, activeSeconds: 0 };
+    },
+
+    async getExerciseReport(from: string, to: string): Promise<ExerciseReport> {
+      const dayRows = await db.all<ExerciseDayPoint>(
+        `SELECT local_date AS date, SUM(actual_seconds) AS activeSeconds, SUM(status = 'completed') AS sets
+         FROM exercise_logs WHERE kind = 'set' AND local_date BETWEEN ? AND ?
+         GROUP BY local_date`,
+        [from, to],
+      );
+      const byDate = new Map(dayRows.map((d) => [d.date, d]));
+      const days = datesBetween(from, to).map((date) => byDate.get(date) ?? { date, activeSeconds: 0, sets: 0 });
+
+      const totals = (await first<{
+        activeSeconds: number;
+        restSeconds: number;
+        sets: number;
+        reps: number;
+        exercisesCompleted: number;
+      }>(
+        db,
+        `SELECT
+           COALESCE(SUM(actual_seconds) FILTER (WHERE kind = 'set'), 0)                          AS activeSeconds,
+           COALESCE(SUM(actual_seconds) FILTER (WHERE kind = 'rest'), 0)                         AS restSeconds,
+           COUNT(*) FILTER (WHERE kind = 'set' AND status = 'completed')                         AS sets,
+           COALESCE(SUM(reps) FILTER (WHERE kind = 'set' AND status = 'completed'), 0)          AS reps,
+           COALESCE(SUM(completes_exercise), 0)                                                  AS exercisesCompleted
+         FROM exercise_logs WHERE local_date BETWEEN ? AND ?`,
+        [from, to],
+      ))!;
+
+      const exercises = await db.all<{ title: string; sets: number; reps: number; activeSeconds: number }>(
+        `SELECT COALESCE(exercise_title, 'Exercise') AS title,
+                SUM(status = 'completed') AS sets,
+                COALESCE(SUM(reps) FILTER (WHERE status = 'completed'), 0) AS reps,
+                SUM(actual_seconds) AS activeSeconds
+         FROM exercise_logs WHERE kind = 'set' AND local_date BETWEEN ? AND ?
+         GROUP BY COALESCE(exercise_id, exercise_title)
+         ORDER BY activeSeconds DESC, title ASC
+         LIMIT 50`,
+        [from, to],
+      );
+
+      return {
+        from,
+        to,
+        totals: { ...totals, activeDays: days.filter((d) => d.activeSeconds > 0).length },
+        days,
+        exercises,
+      };
     },
 
     // -- Categories ---------------------------------------------------------

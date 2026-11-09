@@ -60,6 +60,40 @@ const MIGRATIONS = [
        ('Assignments', 'aqua', 3, CAST(strftime('%s', 'now') AS INTEGER) * 1000),
        ('Development', 'yellow', 4, CAST(strftime('%s', 'now') AS INTEGER) * 1000)`,
   ],
+  // 4: exercise mode: the exercise list and a log of every set and rest.
+  [
+    `CREATE TABLE exercises (
+       id               INTEGER PRIMARY KEY AUTOINCREMENT,
+       title            TEXT    NOT NULL,
+       sets             INTEGER NOT NULL DEFAULT 3,
+       mode             TEXT    NOT NULL CHECK (mode IN ('reps', 'time')),
+       reps             INTEGER,
+       duration_seconds INTEGER,
+       done             INTEGER NOT NULL DEFAULT 0,
+       sort_order       INTEGER NOT NULL DEFAULT 0,
+       created_at       INTEGER NOT NULL,
+       completed_at     INTEGER
+     )`,
+    `CREATE TABLE exercise_logs (
+       id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+       client_id          TEXT    NOT NULL UNIQUE,
+       kind               TEXT    NOT NULL CHECK (kind IN ('set', 'rest')),
+       status             TEXT    NOT NULL CHECK (status IN ('completed', 'skipped', 'stopped')),
+       exercise_id        INTEGER REFERENCES exercises (id) ON DELETE SET NULL,
+       exercise_title     TEXT,
+       set_number         INTEGER,
+       reps               INTEGER,
+       planned_seconds    INTEGER,
+       actual_seconds     INTEGER NOT NULL,
+       completes_exercise INTEGER NOT NULL DEFAULT 0,
+       started_at         INTEGER NOT NULL,
+       ended_at           INTEGER NOT NULL,
+       local_date         TEXT    NOT NULL,
+       local_hour         INTEGER NOT NULL
+     )`,
+    "CREATE INDEX exercise_logs_local_date ON exercise_logs (local_date)",
+    "CREATE INDEX exercises_done ON exercises (done, sort_order)",
+  ],
 ];
 
 export async function migrate(db: SqlDriver): Promise<void> {

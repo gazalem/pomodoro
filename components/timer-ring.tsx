@@ -1,51 +1,58 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { formatClock } from "@/lib/format";
-import { remainingMs, type Phase } from "@/lib/schedule";
 import { useNow } from "@/lib/use-now";
-import type { PhaseType } from "@/lib/types";
 
 const RADIUS = 45;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
-const PHASE_LABEL: Record<PhaseType, string> = {
-  focus: "Focus",
-  short_break: "Short break",
-  long_break: "Long break",
-  lunch: "Lunch",
-};
+/** The timing fields both the pomodoro and the workout phases share. */
+export interface RingPhase {
+  /** null = untimed (counts up until the user ends it). */
+  plannedMs: number | null;
+  accumulatedMs: number;
+  resumedAt: number | null;
+}
 
 interface TimerRingProps {
-  phase: Phase | null;
-  /** Shown when idle: the length of the next focus block. */
+  phase: RingPhase | null;
+  /** Shown when idle: the length of the next phase. */
   idleMs: number;
+  label: string;
+  /** Browser tab title while idle. */
+  idleTitle?: string;
+  /** Stroke class for the unfilled track (contrasts with the page color). */
+  trackClassName?: string;
+  /** Replaces the big clock, e.g. "15 reps" for an untimed set; the clock then shows small, counting up. */
+  center?: ReactNode;
 }
 
 /**
  * The cream arc is the time left; it retreats counter-clockwise toward
- * 12 o'clock as the phase runs, revealing the salmon track underneath.
+ * 12 o'clock as the phase runs, revealing the track underneath.
  */
-export function TimerRing({ phase, idleMs }: TimerRingProps) {
+export function TimerRing({ phase, idleMs, label, idleTitle = "Pomodoro", trackClassName = "stroke-salmon", center }: TimerRingProps) {
   const now = useNow();
-  const left = phase ? (now === null ? phase.plannedMs - phase.accumulatedMs : remainingMs(phase, now)) : idleMs;
-  const total = phase?.plannedMs ?? idleMs;
-  const fraction = total > 0 ? left / total : 0;
-  const clock = formatClock(left);
-  const label = phase ? PHASE_LABEL[phase.type] : "Ready";
+  const elapsed = phase ? phase.accumulatedMs + (phase.resumedAt !== null && now !== null ? now - phase.resumedAt : 0) : 0;
+  const untimed = phase !== null && phase.plannedMs === null;
+  const total = phase ? (phase.plannedMs ?? 0) : idleMs;
+  const left = phase ? Math.max(0, total - elapsed) : idleMs;
+  const fraction = untimed ? 1 : total > 0 ? left / total : 0;
+  const clock = formatClock(untimed ? elapsed : left);
 
   useEffect(() => {
-    document.title = phase ? `${clock} · ${label}` : "Pomodoro";
-  }, [clock, label, phase]);
+    document.title = phase ? `${clock} · ${label}` : idleTitle;
+  }, [clock, label, phase, idleTitle]);
 
   return (
     <div
       className="@container relative aspect-square w-[min(84vw,46dvh,440px)] md:w-[min(64vw,44dvh,440px)]"
       role="timer"
-      aria-label={`${label}: ${clock} remaining`}
+      aria-label={untimed ? `${label}: ${clock} elapsed` : `${label}: ${clock} remaining`}
     >
       <svg viewBox="0 0 100 100" className="size-full -rotate-90">
-        <circle cx="50" cy="50" r={RADIUS} fill="none" strokeWidth="6" className="stroke-salmon" />
+        <circle cx="50" cy="50" r={RADIUS} fill="none" strokeWidth="6" className={trackClassName} />
         {fraction > 0.001 && (
           <circle
             cx="50"
@@ -59,12 +66,15 @@ export function TimerRing({ phase, idleMs }: TimerRingProps) {
           />
         )}
       </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
+      <div className="absolute inset-0 flex flex-col items-center justify-center px-[10cqw] text-center">
         {/* Sized in container units so the digits always fit inside the ring. */}
-        <span className={`leading-none font-extralight tracking-wide tabular-nums ${clock.length > 5 ? "text-[17cqw]" : "text-[23cqw]"}`}>
-          {clock}
-        </span>
+        {center ?? (
+          <span className={`leading-none font-extralight tracking-wide tabular-nums ${clock.length > 5 ? "text-[17cqw]" : "text-[23cqw]"}`}>
+            {clock}
+          </span>
+        )}
         <span className="mt-[3cqw] text-[3.4cqw] font-medium tracking-[0.2em] text-cream/80 uppercase">{label}</span>
+        {center && phase && <span className="mt-[1.5cqw] text-[5cqw] font-light text-cream/90 tabular-nums">{clock}</span>}
       </div>
     </div>
   );

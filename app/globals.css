@@ -12,6 +12,11 @@
   --color-night-raised: #2d201d;
   --color-mist: #f6e9e2;
   --color-mist-soft: #c4a8a0;
+  /* Exercise mode */
+  --color-teal: #17806b;
+  --color-teal-deep: #0f5f50;
+  --color-mint: #4cb59c;
+  --color-teal-bright: #2ea88d;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -23,6 +28,11 @@ html {
 body {
   background: var(--color-tomato);
   color: var(--color-cream);
+}
+
+/* The exercise page paints the whole viewport (overscroll included) teal. */
+body:has(.theme-exercise) {
+  background: var(--color-teal);
 }
 
 dialog::backdrop {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { localDate } from "@/lib/schedule";
 import { shiftDate, useToday } from "@/lib/use-now";
 
@@ -13,7 +13,10 @@ const PRESETS = [
 export function RangePicker({ from, to }: { from: string; to: string }) {
   const router = useRouter();
   const today = useToday();
-  const go = (f: string, t: string) => router.push(`/report?from=${f}&to=${t}`);
+  const params = useSearchParams();
+  const view = params.get("view");
+  // Keep the report tab (focus/exercise) when changing the range.
+  const go = (f: string, t: string) => router.push(`/report?${view ? `view=${view}&` : ""}from=${f}&to=${t}`);
 
   return (
     <div className="flex flex-wrap items-center gap-2">

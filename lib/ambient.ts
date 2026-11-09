@@ -99,6 +99,23 @@ class AmbientEngine {
     });
   }
 
+  /** A short tick for countdowns; `final` is higher-pitched (the "go" beep). */
+  beep(final = false) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = final ? 1318.5 : 880;
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.3, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + (final ? 0.45 : 0.15));
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.5);
+  }
+
   // -------------------------------------------------------------------------
   // Building blocks
 

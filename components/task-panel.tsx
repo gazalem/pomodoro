@@ -1,31 +1,12 @@
 "use client";
 
-import {
-  closestCenter,
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type Announcements,
-  type DragEndEvent,
-  type Modifier,
-  type UniqueIdentifier,
-} from "@dnd-kit/core";
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import { useEffect, useId, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import type { CategoryColor } from "@/lib/categories";
 import { useStoredString } from "@/lib/storage";
 import type { Category, Task } from "@/lib/types";
 import { CategoryDot, CategoryFilter, CategoryManager, CategorySelect, type CategoryFilterValue } from "./categories";
-import { CheckIcon, GripIcon, MinusIcon, PencilIcon, PlusIcon, TomatoIcon, TrashIcon } from "./icons";
+import { CheckIcon, MinusIcon, PencilIcon, PlusIcon, TomatoIcon, TrashIcon } from "./icons";
+import { SortableList, type DragProps } from "./sortable-list";
 
 const FILTER_KEY = "pomodoro.taskFilter.v1";
 
@@ -214,22 +195,28 @@ export function TaskPanel({
               : `No open tasks in ${filterName ?? "Uncategorized"}.`}
           </p>
         ) : (
-          <SortableTaskList
-            tasks={open}
+          <SortableList
+            items={open}
+            itemLabel={(task) => task.title}
+            isLocked={(task) => task.id === editingId}
             onReorder={(visibleOrder) => onReorder(mergeOrder(allOpen.map((t) => t.id), visibleOrder))}
-            rowProps={(task) => ({
-              active: task.id === activeTaskId,
-              onToggle: () => {
-                if (task.id === activeTaskId) onSelect(null);
-                onToggle(task);
-              },
-              onRemove: () => {
-                if (task.id === activeTaskId) onSelect(null);
-                onRemove(task);
-              },
-              onSelect: () => onSelect(task.id === activeTaskId ? null : task.id),
-              ...editProps(task),
-            })}
+            renderItem={(task, drag) => (
+              <TaskRow
+                task={task}
+                drag={drag}
+                active={task.id === activeTaskId}
+                onToggle={() => {
+                  if (task.id === activeTaskId) onSelect(null);
+                  onToggle(task);
+                }}
+                onRemove={() => {
+                  if (task.id === activeTaskId) onSelect(null);
+                  onRemove(task);
+                }}
+                onSelect={() => onSelect(task.id === activeTaskId ? null : task.id)}
+                {...editProps(task)}
+              />
+            )}
           />
         )}
       </section>
@@ -255,121 +242,6 @@ export function TaskPanel({
       )}
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Drag and drop
-
-type RowProps = Omit<TaskRowProps, "task" | "drag">;
-
-const verticalOnly: Modifier = ({ transform }) => ({ ...transform, x: 0 });
-
-/**
- * Reorderable list. Dragging starts from the grip handle only, so tapping a
- * task (to select it) and scrolling on phones keep working. Pointer, touch
- * and keyboard (Space/Enter, arrows, Space/Enter or Escape) are supported.
- */
-function SortableTaskList({
-  tasks,
-  onReorder,
-  rowProps,
-}: {
-  tasks: Task[];
-  onReorder: (ids: number[]) => void;
-  rowProps: (task: Task) => RowProps;
-}) {
-  const contextId = useId();
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-  const ids = tasks.map((t) => t.id);
-
-  const title = (id: UniqueIdentifier) => tasks.find((t) => t.id === id)?.title ?? "Task";
-  const position = (id: UniqueIdentifier) => `position ${ids.indexOf(Number(id)) + 1} of ${ids.length}`;
-  const announcements: Announcements = {
-    onDragStart: ({ active }) => `Picked up "${title(active.id)}", ${position(active.id)}.`,
-    onDragOver: ({ active, over }) =>
-      over ? `"${title(active.id)}" moved to ${position(over.id)}.` : `"${title(active.id)}" is outside the list.`,
-    onDragEnd: ({ active, over }) =>
-      over ? `"${title(active.id)}" dropped at ${position(over.id)}.` : `"${title(active.id)}" dropped.`,
-    onDragCancel: ({ active }) => `Reordering cancelled. "${title(active.id)}" is back where it was.`,
-  };
-
-  function handleDragEnd({ active, over }: DragEndEvent) {
-    if (!over || active.id === over.id) return;
-    onReorder(arrayMove(ids, ids.indexOf(Number(active.id)), ids.indexOf(Number(over.id))));
-  }
-
-  return (
-    <DndContext
-      id={contextId}
-      sensors={sensors}
-      collisionDetection={closestCenter}
-      modifiers={[verticalOnly]}
-      onDragEnd={handleDragEnd}
-      accessibility={{
-        announcements,
-        screenReaderInstructions: {
-          draggable:
-            "To reorder, press Space or Enter, move with the up and down arrow keys, then press Space or Enter to drop, or Escape to cancel.",
-        },
-      }}
-    >
-      <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-        <ul className="flex flex-col gap-2">
-          {tasks.map((task) => (
-            <SortableTaskRow key={task.id} task={task} sortable={tasks.length > 1} {...rowProps(task)} />
-          ))}
-        </ul>
-      </SortableContext>
-    </DndContext>
-  );
-}
-
-function SortableTaskRow({ task, sortable, ...props }: RowProps & { task: Task; sortable: boolean }) {
-  // A row being edited stays put so its inputs can be used normally.
-  const enabled = sortable && !props.editing;
-  const { setNodeRef, setActivatorNodeRef, attributes, listeners, transform, transition, isDragging } = useSortable({
-    id: task.id,
-    disabled: !enabled,
-  });
-
-  return (
-    <TaskRow
-      {...props}
-      task={task}
-      drag={{
-        setRowRef: setNodeRef,
-        style: { transform: CSS.Translate.toString(transform), transition },
-        dragging: isDragging,
-        handle: enabled ? (
-          <button
-            type="button"
-            ref={setActivatorNodeRef}
-            {...attributes}
-            {...listeners}
-            aria-label={`Reorder "${task.title}"`}
-            className={`-ml-1.5 grid h-9 w-6 shrink-0 touch-none place-items-center rounded-lg text-ink-soft/60 hover:bg-ink/5 hover:text-ink focus-visible:outline-2 focus-visible:outline-tomato ${
-              isDragging ? "cursor-grabbing" : "cursor-grab"
-            }`}
-          >
-            <GripIcon />
-          </button>
-        ) : null,
-      }}
-    />
-  );
-}
-
-// ---------------------------------------------------------------------------
-
-/** Present when the row is in the reorderable list. */
-interface DragProps {
-  setRowRef: (node: HTMLElement | null) => void;
-  style: CSSProperties;
-  dragging: boolean;
-  handle: ReactNode;
 }
 
 interface EditProps {
