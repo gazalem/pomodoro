@@ -32,6 +32,8 @@ export interface WorkoutPhase {
   accumulatedMs: number;
   resumedAt: number | null;
   endsAt: number | null;
+  /** A circuit's longer rest between rounds. */
+  roundRest?: boolean;
 }
 
 export type WorkoutStatus = "idle" | "running" | "paused" | "finished";
@@ -78,8 +80,10 @@ const startSet = (ex: Plan, setNumber: number, at: number, s: Timing) =>
   makePhase("set", ex, setNumber, at, setDurationMs(ex, s));
 
 /** A rest before the given set, or the set itself when rest is turned off. */
-const restBefore = (ex: Plan, setNumber: number, at: number, s: Timing, seconds = s.restSeconds) =>
-  seconds > 0 ? makePhase("rest", ex, setNumber, at, seconds * 1000) : startSet(ex, setNumber, at, s);
+function restBefore(ex: Plan, setNumber: number, at: number, s: Timing, roundRest = false): WorkoutPhase {
+  const seconds = roundRest ? s.roundRestSeconds || s.restSeconds : s.restSeconds;
+  return seconds > 0 ? { ...makePhase("rest", ex, setNumber, at, seconds * 1000), roundRest } : startSet(ex, setNumber, at, s);
+}
 
 export function elapsedMs(phase: WorkoutPhase, now: number): number {
   return phase.accumulatedMs + (phase.resumedAt !== null ? now - phase.resumedAt : 0);
@@ -132,7 +136,7 @@ function finishPhase(state: WorkoutState, at: number, actualMs: number, status: 
   let next: WorkoutPhase | null = null;
   if (phase.kind === "set") {
     const following = nextAfterSet(phase, list, s);
-    if (following) next = restBefore(following.ex, following.setNumber, at, s, following.newRound ? s.roundRestSeconds || s.restSeconds : s.restSeconds);
+    if (following) next = restBefore(following.ex, following.setNumber, at, s, following.newRound);
   } else {
     // After a rest comes the set it announced, using the exercise's current settings.
     const ex = list.find((e) => e.id === phase.exerciseId) ?? list[0];
@@ -231,7 +235,7 @@ export function workoutReducer(state: WorkoutState, action: WorkoutAction): Work
       const fresh =
         phase.kind === "set"
           ? startSet(ex, phase.setNumber, action.now, action.settings)
-          : restBefore(ex, phase.setNumber, action.now, action.settings);
+          : restBefore(ex, phase.setNumber, action.now, action.settings, phase.roundRest);
       return { ...base, status: "running", phase: fresh };
     }
 
