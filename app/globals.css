@@ -17,6 +17,9 @@
   --color-teal-deep: #0f5f50;
   --color-mint: #4cb59c;
   --color-teal-bright: #2ea88d;
+  --color-rest: #3d5a99;
+  --color-rest-deep: #2b3f73;
+  --color-rest-track: #6f8ccc;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -33,6 +36,13 @@ body {
 /* The exercise page paints the whole viewport (overscroll included) teal. */
 body:has(.theme-exercise) {
   background: var(--color-teal);
+  transition: background-color 0.5s;
+}
+body:has(.theme-exercise [data-rest="short"]) {
+  background: var(--color-rest);
+}
+body:has(.theme-exercise [data-rest="round"]) {
+  background: var(--color-rest-deep);
 }
 
 dialog::backdrop {

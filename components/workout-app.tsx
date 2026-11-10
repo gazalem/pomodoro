@@ -164,11 +164,13 @@ export function WorkoutApp({ db, initialSettings, initialExercises }: WorkoutApp
 
   const first = open.find((e) => e.id === selectedId) ?? open[0];
   const idleMs = first ? (setDurationMs(first, settings) ?? 0) : settings.exerciseSeconds * 1000;
+  const rest = phase?.kind === "rest" ? (phase.roundRest ? "round" : "short") : undefined;
 
   return (
     <div
+      data-rest={rest}
       className={`flex min-h-dvh flex-col pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pl-[env(safe-area-inset-left)] transition-colors duration-500 ${
-        phase?.kind === "rest" ? "bg-teal-deep" : "bg-teal"
+        rest === "round" ? "bg-rest-deep" : rest ? "bg-rest" : "bg-teal"
       }`}
     >
       <header className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 px-5 pt-3 md:px-8 md:pt-5">
@@ -222,7 +224,7 @@ export function WorkoutApp({ db, initialSettings, initialExercises }: WorkoutApp
             phase={phase}
             idleMs={idleMs}
             idleTitle="Exercise · Pomodoro"
-            trackClassName="stroke-mint"
+            trackClassName={rest ? "stroke-rest-track" : "stroke-mint"}
             label={ringLabel(state)}
             center={
               state.status === "finished" ? (
@@ -277,7 +279,7 @@ export function WorkoutApp({ db, initialSettings, initialExercises }: WorkoutApp
 function ringLabel(state: WorkoutState): string {
   const { phase } = state;
   if (!phase) return state.status === "finished" ? "Done" : "Ready";
-  if (phase.kind === "rest") return "Rest";
+  if (phase.kind === "rest") return phase.roundRest ? "Round rest" : "Rest";
   return `Set ${phase.setNumber} of ${phase.totalSets}`;
 }
 
@@ -288,6 +290,7 @@ function headline(state: WorkoutState, openCount: number, first: Exercise | unde
     if (openCount === 0) return "Add exercises to start a workout";
     return first ? `Start with ${first.title}` : "Ready";
   }
+  if (phase.roundRest) return `Round ${phase.setNumber} starts with ${phase.exerciseTitle}`;
   if (phase.kind === "rest") return phase.setNumber === 1 ? `Next: ${phase.exerciseTitle}` : `Rest · next set of ${phase.exerciseTitle}`;
   return phase.exerciseTitle;
 }
