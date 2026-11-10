@@ -1,18 +1,20 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import type { AppDatabase } from "@/lib/db/browser";
 import type { Settings } from "@/lib/types";
 import { formatSeconds, NumberStepper } from "./exercise-panel";
-import { Group, Toggle } from "./settings-form";
+import { DataSection, Group, Toggle } from "./settings-form";
 
 interface ExerciseSettingsFormProps {
+  db: AppDatabase;
   settings: Settings;
   onSave: (settings: Settings) => Promise<boolean>;
   onCancel: () => void;
 }
 
 /** Exercise-mode settings: default set length, rest length, sounds and screen. */
-export function ExerciseSettingsForm({ settings, onSave, onCancel }: ExerciseSettingsFormProps) {
+export function ExerciseSettingsForm({ db, settings, onSave, onCancel }: ExerciseSettingsFormProps) {
   const [draft, setDraft] = useState({
     exerciseSeconds: settings.exerciseSeconds,
     restSeconds: settings.restSeconds,
@@ -60,6 +62,8 @@ export function ExerciseSettingsForm({ settings, onSave, onCancel }: ExerciseSet
         <Toggle label="Beep 3-2-1 before each change" checked={draft.chime} onChange={(v) => set("chime", v)} />
         <Toggle label="Keep the screen awake during a workout" checked={draft.keepScreenAwake} onChange={(v) => set("keepScreenAwake", v)} />
       </Group>
+
+      <DataSection db={db} />
 
       {error && (
         <p role="alert" className="text-sm font-medium text-tomato-deep">

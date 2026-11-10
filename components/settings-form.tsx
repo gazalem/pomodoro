@@ -223,7 +223,7 @@ export function Toggle({ label, hint, checked, onChange }: ToggleProps) {
 }
 
 /** Backup and restore: the database lives only in this browser. */
-function DataSection({ db }: { db: AppDatabase }) {
+export function DataSection({ db }: { db: AppDatabase }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -248,7 +248,7 @@ function DataSection({ db }: { db: AppDatabase }) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    if (!window.confirm("Replace all tasks, sessions and settings on this device with this backup?")) return;
+    if (!window.confirm("Replace all tasks, exercises, sessions and settings on this device with this backup?")) return;
     setBusy(true);
     try {
       await db.importDb(new Uint8Array(await file.arrayBuffer()));
