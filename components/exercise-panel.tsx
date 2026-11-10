@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { EXERCISE_LIMITS } from "@/lib/repo";
+import { fieldsFrom, toInput, type FieldsState } from "@/lib/exercise-fields";
 import type { Exercise, ExerciseMode } from "@/lib/types";
 import type { ExerciseInput } from "@/lib/use-exercises";
 import { CheckIcon, MinusIcon, PencilIcon, PlusIcon, TrashIcon } from "./icons";
@@ -126,37 +127,8 @@ export function ExercisePanel(props: ExercisePanelProps) {
 // ---------------------------------------------------------------------------
 // Add / edit
 
-interface FieldsState {
-  title: string;
-  mode: ExerciseMode;
-  sets: number;
-  reps: number;
-  seconds: number;
-}
-
-function fieldsFrom(e: Exercise | null, defaultSeconds: number): FieldsState {
-  return {
-    title: e?.title ?? "",
-    mode: e?.mode ?? "reps",
-    sets: e?.sets ?? 3,
-    reps: e?.reps ?? 10,
-    seconds: e?.durationSeconds ?? defaultSeconds,
-  };
-}
-
-/** A timed exercise left at the default follows the setting (stored as null). */
-function toInput(f: FieldsState, defaultSeconds: number): ExerciseInput {
-  return {
-    title: f.title.trim(),
-    mode: f.mode,
-    sets: f.sets,
-    reps: f.mode === "reps" ? f.reps : null,
-    durationSeconds: f.mode === "time" && f.seconds !== defaultSeconds ? f.seconds : null,
-  };
-}
-
 function AddExerciseForm({ defaultSeconds, onAdd }: { defaultSeconds: number; onAdd: (input: ExerciseInput) => Promise<Exercise | null> }) {
-  const [fields, setFields] = useState(() => fieldsFrom(null, defaultSeconds));
+  const [fields, setFields] = useState(() => fieldsFrom(null));
   const [saving, setSaving] = useState(false);
   const id = useId();
 
@@ -215,12 +187,12 @@ function ExerciseFields({
       ) : (
         <NumberStepper
           label="Seconds"
-          value={fields.seconds}
+          value={fields.seconds ?? defaultSeconds}
           step={5}
           min={EXERCISE_LIMITS.seconds[0]}
           max={EXERCISE_LIMITS.seconds[1]}
           onChange={(v) => set("seconds", v)}
-          hint={fields.seconds === defaultSeconds ? "default" : undefined}
+          hint={(fields.seconds ?? defaultSeconds) === defaultSeconds ? "default" : undefined}
         />
       )}
     </div>
@@ -415,7 +387,7 @@ function ExerciseEditor({
   onSave: (input: ExerciseInput) => void;
   onCancel: () => void;
 }) {
-  const [fields, setFields] = useState(() => fieldsFrom(exercise, defaultSeconds));
+  const [fields, setFields] = useState(() => fieldsFrom(exercise));
   const input = useRef<HTMLInputElement>(null);
   const id = useId();
   const trimmed = fields.title.trim();
