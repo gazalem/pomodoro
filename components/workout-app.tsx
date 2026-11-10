@@ -268,7 +268,7 @@ export function WorkoutApp({ db, initialSettings, initialExercises }: WorkoutApp
         {exercisePanel}
       </Sheet>
       <Sheet open={panel === "settings"} title="Exercise settings" onClose={() => setPanel(null)}>
-        {panel === "settings" && <ExerciseSettingsForm settings={settings} onSave={saveSettings} onCancel={() => setPanel(null)} />}
+        {panel === "settings" && <ExerciseSettingsForm db={db} settings={settings} onSave={saveSettings} onCancel={() => setPanel(null)} />}
       </Sheet>
     </div>
   );
