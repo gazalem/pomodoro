@@ -284,7 +284,8 @@ export function DataSection({ db }: { db: AppDatabase }) {
         >
           Restore from backup…
         </button>
-        <input ref={fileRef} type="file" accept=".sqlite3,.sqlite,.db,application/vnd.sqlite3" hidden onChange={restore} />
+        {/* No `accept`: iOS has no type for .sqlite3 and would grey the file out. importDb validates the contents. */}
+        <input ref={fileRef} type="file" hidden onChange={restore} />
       </div>
       {status && (
         <p role="status" className="pb-3 text-sm text-ink">
