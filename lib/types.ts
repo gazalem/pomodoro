@@ -34,6 +34,10 @@ export interface Settings {
   exerciseSeconds: number;
   /** Exercise mode: rest between sets, in seconds (0 = no rest). */
   restSeconds: number;
+  /** Exercise mode: "circuit" = one set of each exercise per round; "straight" = all sets of one, then the next. */
+  workoutFlow: "circuit" | "straight";
+  /** Exercise mode (circuit): rest between rounds, in seconds (0 = use restSeconds). */
+  roundRestSeconds: number;
 }
 
 export interface Task {
