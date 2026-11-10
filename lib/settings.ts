@@ -21,6 +21,8 @@ export const DEFAULT_SETTINGS: Settings = {
   keepScreenAwake: true,
   exerciseSeconds: 45,
   restSeconds: 15,
+  workoutFlow: "circuit",
+  roundRestSeconds: 60,
 };
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
@@ -69,5 +71,7 @@ export function normalizeSettings(input: unknown): Settings {
     keepScreenAwake: bool(raw.keepScreenAwake, d.keepScreenAwake),
     exerciseSeconds: int(raw.exerciseSeconds, d.exerciseSeconds, 5, 3600),
     restSeconds: int(raw.restSeconds, d.restSeconds, 0, 1800),
+    workoutFlow: raw.workoutFlow === "straight" ? "straight" : d.workoutFlow,
+    roundRestSeconds: int(raw.roundRestSeconds, d.roundRestSeconds, 0, 1800),
   };
 }

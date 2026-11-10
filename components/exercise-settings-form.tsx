@@ -18,6 +18,8 @@ export function ExerciseSettingsForm({ db, settings, onSave, onCancel }: Exercis
   const [draft, setDraft] = useState({
     exerciseSeconds: settings.exerciseSeconds,
     restSeconds: settings.restSeconds,
+    workoutFlow: settings.workoutFlow,
+    roundRestSeconds: settings.roundRestSeconds,
     chime: settings.chime,
     keepScreenAwake: settings.keepScreenAwake,
   });
@@ -35,6 +37,15 @@ export function ExerciseSettingsForm({ db, settings, onSave, onCancel }: Exercis
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-6 pb-2">
+      <Group title="Workout">
+        <Toggle
+          label="Circuit"
+          hint="One set of each exercise per round, then a round rest. Off: all sets of one exercise, then the next."
+          checked={draft.workoutFlow === "circuit"}
+          onChange={(v) => set("workoutFlow", v ? "circuit" : "straight")}
+        />
+      </Group>
+
       <Group title="Timing">
         <div className="flex items-center justify-between gap-4 py-2.5">
           <span>
@@ -50,12 +61,22 @@ export function ExerciseSettingsForm({ db, settings, onSave, onCancel }: Exercis
           </span>
           <NumberStepper label="Seconds" ariaLabel="Rest time in seconds" value={draft.restSeconds} min={0} max={1800} step={5} onChange={(v) => set("restSeconds", v)} />
         </div>
+        {draft.workoutFlow === "circuit" && (
+          <div className="flex items-center justify-between gap-4 py-2.5">
+            <span>
+              Round rest
+              <span className="block text-xs text-ink-soft">After the last exercise, before the next round; 0 = rest time</span>
+            </span>
+            <NumberStepper label="Seconds" ariaLabel="Round rest in seconds" value={draft.roundRestSeconds} min={0} max={1800} step={5} onChange={(v) => set("roundRestSeconds", v)} />
+          </div>
+        )}
       </Group>
 
       <p className="-mt-3 rounded-2xl bg-teal/10 px-4 py-3 text-sm text-ink">
         A timed set runs {formatSeconds(draft.exerciseSeconds)}, then{" "}
         {draft.restSeconds > 0 ? `${formatSeconds(draft.restSeconds)} of rest` : "the next set starts right away"}.
         Repetition sets wait for you to tap Done, then the rest starts.
+        {draft.workoutFlow === "circuit" && ` After each round: ${formatSeconds(draft.roundRestSeconds || draft.restSeconds)} of rest.`}
       </p>
 
       <Group title="Sound & screen">

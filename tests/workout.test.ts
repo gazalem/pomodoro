@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { advance, INITIAL_WORKOUT, workoutReducer, type WorkoutState } from "../lib/workout.ts";
-import type { Exercise } from "../lib/types.ts";
+import type { Exercise, Settings } from "../lib/types.ts";
 
 const T0 = Date.parse("2026-11-09T09:00:00Z");
 const sec = (n: number) => T0 + n * 1000;
-const timing = { exerciseSeconds: 45, restSeconds: 15 };
+const timing: Pick<Settings, "exerciseSeconds" | "restSeconds" | "workoutFlow" | "roundRestSeconds"> = { exerciseSeconds: 45, restSeconds: 15, workoutFlow: "straight", roundRestSeconds: 60 };
 
 function ex(id: number, title: string, sets: number, mode: "reps" | "time", extra: Partial<Exercise> = {}): Exercise {
   return {
@@ -50,7 +50,7 @@ describe("timed sets", () => {
   });
 
   it("skips rest entirely when rest time is 0", () => {
-    const noRest = { exerciseSeconds: 45, restSeconds: 0 };
+    const noRest = { ...timing, restSeconds: 0 };
     assert.equal(shape(advance(start(list, noRest), sec(30), list, noRest)), "set:Plank#2");
   });
 });
@@ -124,5 +124,35 @@ describe("controls", () => {
     const s = advance(start(), sec(30 + 10 * 60), list, timing);
     assert.equal(s.status, "idle");
     assert.equal(s.outbox[0].status, "stopped");
+  });
+});
+
+describe("circuit", () => {
+  const circuit = { ...timing, workoutFlow: "circuit" as const };
+  const a = ex(1, "A", 2, "time", { durationSeconds: 30 });
+  const b = ex(2, "B", 2, "time", { durationSeconds: 30 });
+  const c = ex(3, "C", 1, "time", { durationSeconds: 30 });
+  const l = [a, b, c];
+
+  it("runs one set of each exercise per round, with a long rest between rounds", () => {
+    let s = start(l, circuit);
+    const seen: string[] = [];
+    for (let i = 0; i < 20 && s.phase; i++) {
+      seen.push(`${shape(s)}/${(s.phase.plannedMs ?? 0) / 1000}`);
+      s = advance(s, s.phase.endsAt!, l, circuit);
+    }
+    assert.deepEqual(seen, [
+      "set:A#1/30", "rest:B#1/15", "set:B#1/30", "rest:C#1/15", "set:C#1/30",
+      "rest:A#2/60", "set:A#2/30", "rest:B#2/15", "set:B#2/30", // C has only 1 set
+    ]);
+    assert.equal(s.status, "finished");
+    assert.equal(s.outbox.filter((x) => x.completesExercise).map((x) => x.exerciseTitle).join(), "C,A,B");
+  });
+
+  it("uses the short rest between rounds when round rest is 0", () => {
+    const s = { ...circuit, roundRestSeconds: 0 };
+    const atRound2 = advance(start(l, s), sec(30 + 15 + 30 + 15 + 30), l, s);
+    assert.equal(shape(atRound2), "rest:A#2");
+    assert.equal(atRound2.phase?.plannedMs, 15_000);
   });
 });

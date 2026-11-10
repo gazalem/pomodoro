@@ -46,7 +46,7 @@ export interface WorkoutState {
 export const INITIAL_WORKOUT: WorkoutState = { status: "idle", phase: null, outbox: [] };
 
 type Plan = Pick<Exercise, "id" | "title" | "sets" | "mode" | "reps" | "durationSeconds">;
-type Timing = Pick<Settings, "exerciseSeconds" | "restSeconds">;
+type Timing = Pick<Settings, "exerciseSeconds" | "restSeconds" | "workoutFlow" | "roundRestSeconds">;
 
 function newId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -78,16 +78,24 @@ const startSet = (ex: Plan, setNumber: number, at: number, s: Timing) =>
   makePhase("set", ex, setNumber, at, setDurationMs(ex, s));
 
 /** A rest before the given set, or the set itself when rest is turned off. */
-const restBefore = (ex: Plan, setNumber: number, at: number, s: Timing) =>
-  s.restSeconds > 0 ? makePhase("rest", ex, setNumber, at, s.restSeconds * 1000) : startSet(ex, setNumber, at, s);
+const restBefore = (ex: Plan, setNumber: number, at: number, s: Timing, seconds = s.restSeconds) =>
+  seconds > 0 ? makePhase("rest", ex, setNumber, at, seconds * 1000) : startSet(ex, setNumber, at, s);
 
 export function elapsedMs(phase: WorkoutPhase, now: number): number {
   return phase.accumulatedMs + (phase.resumedAt !== null ? now - phase.resumedAt : 0);
 }
 
 /** What follows the given set: the next set, the next exercise's first set, or nothing. */
-function nextAfterSet(phase: WorkoutPhase, list: Plan[]): { ex: Plan; setNumber: number } | null {
+function nextAfterSet(phase: WorkoutPhase, list: Plan[], s: Timing): { ex: Plan; setNumber: number; newRound?: boolean } | null {
   const index = list.findIndex((e) => e.id === phase.exerciseId);
+  if (s.workoutFlow === "circuit") {
+    // Round n = set n of every exercise that has one; then the next round from the top.
+    const round = phase.setNumber;
+    const inRound = index >= 0 ? list.slice(index + 1).find((e) => e.sets >= round) : undefined;
+    if (inRound) return { ex: inRound, setNumber: round };
+    const top = list.find((e) => e.sets > round);
+    return top ? { ex: top, setNumber: round + 1, newRound: true } : null;
+  }
   const current = index >= 0 ? list[index] : null;
   if (current && phase.setNumber < current.sets) return { ex: current, setNumber: phase.setNumber + 1 };
   const following = index >= 0 ? list.slice(index + 1) : list.filter((e) => e.id !== phase.exerciseId);
@@ -123,8 +131,8 @@ function finishPhase(state: WorkoutState, at: number, actualMs: number, status: 
 
   let next: WorkoutPhase | null = null;
   if (phase.kind === "set") {
-    const following = nextAfterSet(phase, list);
-    if (following) next = restBefore(following.ex, following.setNumber, at, s);
+    const following = nextAfterSet(phase, list, s);
+    if (following) next = restBefore(following.ex, following.setNumber, at, s, following.newRound ? s.roundRestSeconds || s.restSeconds : s.restSeconds);
   } else {
     // After a rest comes the set it announced, using the exercise's current settings.
     const ex = list.find((e) => e.id === phase.exerciseId) ?? list[0];
