@@ -81,7 +81,7 @@ export function ExerciseSettingsForm({ db, settings, onSave, onCancel }: Exercis
 
       <Group title="Sound & screen">
         <Toggle label="Beep 3-2-1 before each change" checked={draft.chime} onChange={(v) => set("chime", v)} />
-        <Toggle label="Keep the screen awake during a workout" checked={draft.keepScreenAwake} onChange={(v) => set("keepScreenAwake", v)} />
+        <Toggle label="Keep the screen awake while the app is open" checked={draft.keepScreenAwake} onChange={(v) => set("keepScreenAwake", v)} />
       </Group>
 
       <DataSection db={db} />
