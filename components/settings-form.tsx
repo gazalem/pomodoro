@@ -105,7 +105,7 @@ export function SettingsForm({ db, settings, onSave, onCancel }: SettingsFormPro
         <NumberField label="Daily goal" unit="pomodoros" value={draft.dailyGoal} min={1} max={32} onChange={(v) => set("dailyGoal", v)} />
         <Toggle label="Chime when a phase ends" checked={draft.chime} onChange={(v) => set("chime", v)} />
         <Toggle label="Desktop / phone notifications" checked={draft.notifications} onChange={toggleNotifications} />
-        <Toggle label="Keep the screen awake while running" checked={draft.keepScreenAwake} onChange={(v) => set("keepScreenAwake", v)} />
+        <Toggle label="Keep the screen awake while the app is open" checked={draft.keepScreenAwake} onChange={(v) => set("keepScreenAwake", v)} />
         <Toggle label="Play ambient sound during breaks" checked={draft.ambientDuringBreaks} onChange={(v) => set("ambientDuringBreaks", v)} />
         <label className="flex items-center justify-between gap-4 py-2.5">
           <span>Ambient volume</span>

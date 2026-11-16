@@ -120,7 +120,7 @@ export function WorkoutApp({ db, initialSettings, initialExercises }: WorkoutApp
 
   const running = state.status === "running";
   const active = state.status === "running" || state.status === "paused";
-  useWakeLock(active && settings.keepScreenAwake);
+  useWakeLock(settings.keepScreenAwake);
 
   const selectedId = storedStart !== null && open.some((e) => e.id === Number(storedStart)) ? Number(storedStart) : null;
 

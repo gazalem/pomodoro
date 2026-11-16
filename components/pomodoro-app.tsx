@@ -149,7 +149,7 @@ export function PomodoroApp({ db, initialSettings, initialTasks, initialCategori
   }, [sound, audible]);
 
   // Keep phones from sleeping while the timer runs.
-  useWakeLock(running && settings.keepScreenAwake);
+  useWakeLock(settings.keepScreenAwake);
 
   const act = (type: "start" | "pause" | "resume" | "restart" | "skip" | "stop") => {
     ambient.unlock(); // user gesture: allowed to start audio now
