@@ -1,9 +1,9 @@
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { SqlDriver } from "../lib/db/driver.ts";
 
-/** In-memory node:sqlite implementation of the browser driver interface. */
-export function nodeDriver(): SqlDriver {
-  const db = new DatabaseSync(":memory:");
+/** node:sqlite implementation of the browser driver interface (in memory unless a file path is given). */
+export function nodeDriver(path = ":memory:"): SqlDriver {
+  const db = new DatabaseSync(path);
   db.exec("PRAGMA foreign_keys = ON");
   const bind = (params: SQLInputValue[] = []) => params;
 

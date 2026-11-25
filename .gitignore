@@ -231,3 +231,6 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+
+# Demo database and screenshots (scripts/make-demo-db.ts)
+/demo

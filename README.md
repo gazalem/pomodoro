@@ -88,6 +88,24 @@ Unlike the plain `opfs` VFS, it doesn't need COOP/COEP headers, so it works on G
   snapshotted to IndexedDB after each write. The settings sheet says which mode is active.
 - Only one tab can own the database at a time (a Web Lock enforces this). A second tab shows a
   notice and takes over automatically when the first one closes.
+- One backup covers both tabs: tasks, focus sessions, exercises, workouts and settings.
+
+### Demo data
+
+To show the reports with realistic history, generate a demo database: six weeks of focus sessions,
+tasks across categories, and circuit workouts, ending today at the current time.
+
+```bash
+node --import ./tests/register.mjs scripts/make-demo-db.ts
+```
+
+It writes `demo/pomodoro-demo.sqlite3` (git-ignored). Load it with **Settings → Restore from
+backup…**, which replaces all data on that device, so download your own backup first.
+
+- Optional arguments: output path and end date, e.g. `… make-demo-db.ts demo/pomodoro-demo.sqlite3 2026-12-05`.
+- The same end date always gives the same data. Rebuild it before a demo: **Today** and **7 days**
+  count back from the real date.
+- Days and hours follow the timezone of the machine that runs the script.
 
 ## Architecture
 
